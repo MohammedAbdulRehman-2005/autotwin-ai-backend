@@ -1,0 +1,87 @@
+version: "3.11"
+
+# ══════════════════════════════════════════════════════════════
+# AutoTwin AI — Docker Compose Stack
+# ══════════════════════════════════════════════════════════════
+# Services:
+#   backend  — FastAPI application (port 8000)
+#   mongodb  — MongoDB 7 primary store (port 27017)
+#
+# Usage:
+#   docker compose up --build          # start all services
+#   docker compose up --build backend  # start only the API
+#   docker compose down -v             # stop + remove volumes
+# ══════════════════════════════════════════════════════════════
+
+services:
+
+  # ── MongoDB ────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: autotwin_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: autotwin
+      MONGO_INITDB_ROOT_PASSWORD: autotwin_secret
+      MONGO_INITDB_DATABASE: autotwin
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - autotwin_net
+
+  # ── Backend API ────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autotwin_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override DB URL to use the Docker service name
+      MONGODB_URL: mongodb://autotwin:autotwin_secret@mongodb:27017/autotwin?authSource=admin
+      DATABASE_NAME: autotwin
+    volumes:
+      # Mount source for hot-reload in development
+      # Comment out for production image
+      - .:/app
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - autotwin_net
+
+# ══════════════════════════════════════════════════════════════
+# Volumes
+# ══════════════════════════════════════════════════════════════
+volumes:
+  mongo_data:
+    driver: local
+  mongo_config:
+    driver: local
+
+# ══════════════════════════════════════════════════════════════
+# Networks
+# ══════════════════════════════════════════════════════════════
+networks:
+  autotwin_net:
+    driver: bridge

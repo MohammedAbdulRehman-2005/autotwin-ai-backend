@@ -1,0 +1,12 @@
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+mongo_data/
+mongo_config/
+backend/mongo_data/
+backend/mongo_config/
+.vscode/
+.DS_Store
