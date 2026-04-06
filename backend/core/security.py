@@ -33,12 +33,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 # ── Passlib bcrypt context ────────────────────────────────────────────
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# ── Built-in demo user (hashed at module load time) ──────────────────
+# ── Built-in demo user (lazily hashed on first access) ───────────────
 _DEMO_USER_PLAIN_PASSWORD = "demo123"
 _DEMO_USERS: Dict[str, Dict[str, Any]] = {
     "demo": {
         "username": "demo",
-        "hashed_password": _pwd_context.hash(_DEMO_USER_PLAIN_PASSWORD),
+        "hashed_password": None,  # populated lazily by _get_demo_hashed_password()
         "role": "admin",
         "full_name": "Demo Administrator",
         "email": "demo@autotwin.ai",
@@ -46,16 +46,40 @@ _DEMO_USERS: Dict[str, Dict[str, Any]] = {
     }
 }
 
-logger.info("[Security] Demo user 'demo' registered (role=admin).")
+
+def _get_demo_hashed_password() -> str:
+    """Return the demo user's bcrypt hash, computing and caching it on first call."""
+    if _DEMO_USERS["demo"]["hashed_password"] is None:
+        _DEMO_USERS["demo"]["hashed_password"] = hash_password(_DEMO_USER_PLAIN_PASSWORD)
+        logger.info("[Security] Demo user 'demo' registered (role=admin).")
+    return _DEMO_USERS["demo"]["hashed_password"]  # type: ignore[return-value]
 
 
 # ══════════════════════════════════════════════════════════════
 # Password utilities
 # ══════════════════════════════════════════════════════════════
 
+_BCRYPT_MAX_BYTES = 72
+
+
 def hash_password(plain_password: str) -> str:
-    """Return a bcrypt hash of *plain_password*."""
-    return _pwd_context.hash(plain_password)
+    """Return a bcrypt hash of *plain_password*.
+
+    bcrypt silently truncates input at 72 bytes; passlib raises a
+    ``ValueError`` when the encoded password exceeds that limit.  We
+    truncate explicitly here so callers never hit that error, and log a
+    warning so the condition is visible in production logs.
+    """
+    encoded = plain_password.encode("utf-8")
+    if len(encoded) > _BCRYPT_MAX_BYTES:
+        logger.warning(
+            "[Security] hash_password: password exceeds %d bytes (%d bytes); "
+            "truncating to bcrypt limit.",
+            _BCRYPT_MAX_BYTES,
+            len(encoded),
+        )
+        encoded = encoded[:_BCRYPT_MAX_BYTES]
+    return _pwd_context.hash(encoded)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -128,7 +152,11 @@ def get_user(username: str) -> Optional[Dict[str, Any]]:
     Look up a user by username.
     In production replace this with an async DB call.
     """
-    return _DEMO_USERS.get(username)
+    user = _DEMO_USERS.get(username)
+    if user is not None and user.get("hashed_password") is None:
+        # Trigger lazy initialisation of the demo user's bcrypt hash.
+        _get_demo_hashed_password()
+    return user
 
 
 def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
