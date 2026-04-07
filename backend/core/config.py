@@ -1,6 +1,7 @@
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     APP_NAME: str = "AutoTwin AI"
     APP_VERSION: str = "1.0.0"
@@ -11,12 +12,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-    # Database Configuration
-    MONGODB_URL: str = "mongodb://localhost:27017"
-    DATABASE_NAME: str = "autotwin"
-
-    # Optional Services
-    REDIS_URL: Optional[str] = "redis://localhost:6379"
+    # ── Supabase / PostgreSQL ─────────────────────────────────
+    DATABASE_URL: str = ""          # postgresql+asyncpg://...
+    SUPABASE_URL: str = ""          # https://xxx.supabase.co
+    SUPABASE_ANON_KEY: str = ""     # public anon key
+    SUPABASE_SERVICE_ROLE_KEY: str = ""  # service role (server-side only)
+    SUPABASE_STORAGE_BUCKET: str = "invoices"
 
     # CORS Configuration
     CORS_ORIGINS: List[str] = ["https://autotwin-one.vercel.app", "http://localhost:3000"]
@@ -26,5 +27,6 @@ class Settings(BaseSettings):
     MEDIUM_CONFIDENCE_THRESHOLD: float = 0.70
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
 
 settings = Settings()

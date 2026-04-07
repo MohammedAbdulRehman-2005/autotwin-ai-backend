@@ -41,6 +41,7 @@ from models.database import (
     save_approval,
     update_invoice,
 )
+from models.supabase_client import upload_invoice_file
 from models.schemas import (
     ApprovalRequest,
     ApprovalResponse,
@@ -133,17 +134,29 @@ async def process_invoice(
     """
     invoice_id = str(uuid4())
     file_content: Optional[str] = None
+    file_bytes: Optional[bytes] = None
     json_data: Optional[Dict[str, Any]] = None
 
     content_type = request.headers.get("content-type", "")
 
+    user_id = _user.get("username", "demo_user") if _user else "demo_user"
+    file_url: Optional[str] = None
+
     if file is not None:
         raw_bytes = await file.read()
-        try:
-            file_content = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            file_content = raw_bytes.decode("latin-1", errors="replace")
+        file_bytes = raw_bytes
         logger.info("[Routes] /process-invoice | mode=file filename=%s", file.filename)
+        # Upload to Supabase Storage (non-blocking — failure won't abort processing)
+        try:
+            file_url = await upload_invoice_file(
+                invoice_id=invoice_id,
+                filename=file.filename or f"{invoice_id}.bin",
+                file_bytes=raw_bytes,
+            )
+            if file_url:
+                logger.info("[Routes] File stored in Supabase Storage: %s", file_url)
+        except Exception as _upload_exc:  # noqa: BLE001
+            logger.warning("[Routes] Storage upload failed (non-fatal): %s", _upload_exc)
 
     elif "application/json" in content_type:
         try:
@@ -171,8 +184,14 @@ async def process_invoice(
     result: ProcessInvoiceResponse = await _orchestrator.process_invoice(
         invoice_id=invoice_id,
         file_content=file_content,
+        file_bytes=file_bytes,
         json_data=json_data,
+        user_id=user_id,
     )
+
+    # Attach Storage URL to the saved invoice if a file was uploaded
+    if file_url:
+        await update_invoice(invoice_id, {"file_url": file_url}, user_id=user_id)
 
     await _broadcast_logs(invoice_id, result.logs)
     logger.info(
@@ -200,7 +219,8 @@ async def approve_invoice(
     Record a reviewer decision and close the feedback loop:
     confidence is recalculated and the memory graph is updated.
     """
-    existing = await get_invoice(body.invoice_id)
+    user_id = _user.get("username", "demo_user") if _user else "demo_user"
+    existing = await get_invoice(body.invoice_id, user_id=user_id)
     if existing is None:
         existing = {
             "invoice_id": body.invoice_id,
@@ -230,7 +250,7 @@ async def approve_invoice(
     if body.updated_amount is not None:
         updates["amount"] = body.updated_amount
 
-    await update_invoice(body.invoice_id, updates)
+    await update_invoice(body.invoice_id, updates, user_id=user_id)
     await save_approval(
         body.invoice_id,
         {
@@ -238,7 +258,9 @@ async def approve_invoice(
             "reviewer_notes": body.reviewer_notes,
             "updated_confidence": updated_confidence,
             "new_decision": new_decision,
+            "user_id": user_id,
         },
+        user_id=user_id
     )
 
     vendor = existing.get("vendor", "unknown")
@@ -298,8 +320,9 @@ async def dashboard(
     Live MongoDB aggregation when connected; falls back to realistic demo values
     when running in demo mode (no DB required).
     """
+    user_id = _user.get("username", "demo_user") if _user else "demo_user"
     try:
-        db_stats: Dict[str, Any] = await get_dashboard_stats()
+        db_stats: Dict[str, Any] = await get_dashboard_stats(user_id=user_id)
     except Exception as exc:
         logger.warning("[Routes] /dashboard: DB stats error (%s) — using demo data.", exc)
         db_stats = {}
@@ -356,6 +379,7 @@ async def demo_run() -> ProcessInvoiceResponse:
     result: ProcessInvoiceResponse = await _orchestrator.process_invoice(
         invoice_id=invoice_id,
         json_data=json_data,
+        user_id="demo_user",
     )
     await _broadcast_logs(invoice_id, result.logs)
     return result
@@ -376,7 +400,8 @@ async def get_invoice_logs(
     _user: Optional[Dict[str, Any]] = Depends(_optional_auth),
 ) -> List[LogEntry]:
     """Fetch all structured log entries for the given invoice_id."""
-    raw_logs = await get_logs_for_invoice(invoice_id)
+    user_id = _user.get("username", "demo_user") if _user else "demo_user"
+    raw_logs = await get_logs_for_invoice(invoice_id, user_id=user_id)
     if not raw_logs:
         raise HTTPException(
             status_code=404,

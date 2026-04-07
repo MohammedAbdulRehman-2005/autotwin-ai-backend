@@ -34,6 +34,7 @@ from services.confidence import ConfidenceEngine
 from services.decision import DecisionEngine
 from services.logger import PipelineLogger
 from services.memory import MemoryGraph
+from services.gemini_client import extract_with_gemini
 
 logger = logging.getLogger("autotwin_ai.orchestrator")
 
@@ -62,7 +63,9 @@ class Orchestrator:
         self,
         invoice_id: Optional[str] = None,
         file_content: Optional[str] = None,
+        file_bytes: Optional[bytes] = None,
         json_data: Optional[Dict[str, Any]] = None,
+        user_id: str = "demo_user",
     ) -> ProcessInvoiceResponse:
         """
         Execute the full 19-step AutoTwin AI pipeline.
@@ -76,7 +79,7 @@ class Orchestrator:
             ProcessInvoiceResponse — the complete result including logs.
         """
         invoice_id = invoice_id or str(uuid4())
-        pipeline_logger = PipelineLogger(invoice_id)
+        pipeline_logger = PipelineLogger(invoice_id, user_id=user_id)
         start_ms = time.monotonic() * 1000
 
         # ── Step 1 & 2 ─────────────────────────────────────────
@@ -88,11 +91,72 @@ class Orchestrator:
         # ══════════════════════════════
         # Step 3 — Vision extraction
         # ══════════════════════════════
-        pipeline_logger.log("extraction", "Running VisionAgent extraction…", "info")
-        extraction: ExtractionResult = await self.vision_agent.extract(
-            file_content=file_content,
-            json_data=json_data,
-        )
+        if file_bytes:
+            for attempt in range(2):
+                try:
+                    pipeline_logger.log("gemini", "Gemini extraction started", "info")
+        
+                    gemini_data = await extract_with_gemini(file_bytes)
+        
+                    def clean_amount(val):
+                        if isinstance(val, str):
+                            return float(val.replace(",", "").replace("$", "").strip() or 0)
+                        return float(val or 0)
+        
+                    amount = clean_amount(gemini_data.get("amount"))
+        
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+        
+                    date = self.vision_agent._normalise_date(
+                        gemini_data.get("date") or ""
+                    ) or current_date
+        
+                    confidence = 0.9 if gemini_data.get("vendor") and amount > 0 else 0.7
+        
+                    extraction = ExtractionResult(
+                        vendor=gemini_data.get("vendor") or "Unknown Vendor",
+                        amount=amount,
+                        date=date,
+                        extraction_confidence=confidence,
+                        currency=gemini_data.get("currency") or "INR"
+                    )
+        
+                    pipeline_logger.log(
+                        "gemini",
+                        "Gemini extraction success",
+                        "success",
+                        {"vendor": extraction.vendor, "amount": extraction.amount}
+                    )
+                    break
+        
+                except Exception as e:
+                    if attempt == 0:
+                        pipeline_logger.log("gemini", f"Retrying Gemini: {str(e)}", "warning")
+                        continue
+        
+                    if "429" in str(e):
+                        reason = "rate_limit"
+                    elif "timeout" in str(e).lower() or "TimeoutError" in str(type(e)):
+                        reason = "timeout"
+                    else:
+                        reason = "unknown"
+                        
+                    pipeline_logger.log(
+                        "gemini",
+                        f"Gemini failed ({reason}) → fallback triggered: {str(e)}",
+                        "warning"
+                    )
+        
+                    extraction = await self.vision_agent.extract(
+                        file_content="fallback",
+                        json_data=None
+                    )
+        else:
+            pipeline_logger.log("extraction", "Running VisionAgent extraction…", "info")
+            extraction = await self.vision_agent.extract(
+                file_content=file_content,
+                json_data=json_data,
+            )
 
         # ── Step 4 ─────────────────────────────────────────────
         pipeline_logger.log(
@@ -313,8 +377,8 @@ class Orchestrator:
         }
         try:
             from models.database import save_invoice, update_vendor_history
-            await save_invoice(invoice_doc)
-            await update_vendor_history(extraction.vendor, invoice_doc)
+            await save_invoice(invoice_doc, user_id=user_id)
+            await update_vendor_history(extraction.vendor, invoice_doc, user_id=user_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Orchestrator] DB save skipped: %s", exc)
 

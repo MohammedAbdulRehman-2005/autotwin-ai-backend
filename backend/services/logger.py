@@ -42,10 +42,11 @@ class PipelineLogger:
         raw     = pl.to_dict()    # List[dict]  (for JSON response)
     """
 
-    def __init__(self, invoice_id: str) -> None:
+    def __init__(self, invoice_id: str, user_id: str = "demo_user") -> None:
         self.invoice_id = invoice_id
+        self.user_id = user_id
         self._entries: List[LogEntry] = []
-        _py_logger.debug("[PipelineLogger] Initialised for invoice_id=%s", invoice_id)
+        _py_logger.debug("[PipelineLogger] Initialised for invoice_id=%s, user_id=%s", invoice_id, user_id)
 
     # ──────────────────────────────────────────────────────────
     # Core log method (synchronous — no await)
@@ -162,6 +163,7 @@ class PipelineLogger:
                     "level":     entry.level,
                     "metadata":  entry.metadata or {},
                 },
+                user_id=self.user_id
             )
         except Exception as exc:  # noqa: BLE001
             _py_logger.debug("[PipelineLogger] DB persist skipped: %s", exc)

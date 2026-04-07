@@ -9,6 +9,7 @@ Wires together:
   - Lifespan context (startup / shutdown hooks)
   - API router mounted at /api
   - Root redirect → /docs
+  - Supabase PostgreSQL + Storage integration
 """
 
 from __future__ import annotations
@@ -80,12 +81,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Startup
     ───────
     1. Log banner
-    2. Attempt MongoDB connection (graceful fail → demo mode)
-    3. Warm up MemoryGraph with demo vendor data
+    2. Probe Supabase PostgreSQL connection
+    3. Bootstrap Supabase Storage bucket
+    4. Warm up MemoryGraph with demo vendor data
 
     Shutdown
     ────────
-    4. Close MongoDB Motor client cleanly
+    5. Dispose SQLAlchemy async engine pool cleanly
     """
 
     # ── STARTUP ────────────────────────────────────────────────
@@ -94,18 +96,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("  DEBUG=%s", settings.DEBUG)
     logger.info("=" * 60)
 
-    # 1. MongoDB connection probe
+    # 1. Supabase PostgreSQL connection probe
     try:
-        from models.database import _client, _motor_available  # noqa: PLC0415
-        if _motor_available and _client is not None:
-            await _client.admin.command("ping")
-            logger.info("[Startup] ✅ MongoDB connected → %s", settings.MONGODB_URL)
+        from models.database import _engine, _pg_available  # noqa: PLC0415
+        if _pg_available and _engine is not None:
+            async with _engine.connect() as conn:
+                from sqlalchemy import text
+                await conn.execute(text("SELECT 1"))
+            logger.info("[Startup] ✅ Supabase PostgreSQL connected.")
         else:
-            logger.warning("[Startup] ⚠️  MongoDB unavailable — running in IN-MEMORY demo mode.")
+            logger.warning("[Startup] ⚠️  DATABASE_URL not set — running in IN-MEMORY demo mode.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[Startup] ⚠️  MongoDB ping failed (%s) — demo mode active.", exc)
+        logger.warning("[Startup] ⚠️  PostgreSQL probe failed (%s) — demo mode active.", exc)
 
-    # 2. Warm up MemoryGraph
+    # 2. Bootstrap Supabase Storage bucket
+    try:
+        from models.supabase_client import ensure_bucket_exists, is_storage_available  # noqa: PLC0415
+        if is_storage_available():
+            await ensure_bucket_exists()
+            logger.info("[Startup] ✅ Supabase Storage ready (bucket='%s').", settings.SUPABASE_STORAGE_BUCKET)
+        else:
+            logger.warning("[Startup] ⚠️  Supabase Storage unavailable — file uploads disabled.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[Startup] Storage bootstrap error: %s", exc)
+
+    # 3. Warm up MemoryGraph
     try:
         from services.memory import MemoryGraph  # noqa: PLC0415
         mg = MemoryGraph()
@@ -127,12 +142,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── SHUTDOWN ───────────────────────────────────────────────
     logger.info("[Shutdown] Gracefully shutting down %s…", settings.APP_NAME)
     try:
-        from models.database import _client  # noqa: PLC0415
-        if _client is not None:
-            _client.close()
-            logger.info("[Shutdown] ✅ MongoDB Motor client closed.")
+        from models.database import _engine  # noqa: PLC0415
+        if _engine is not None:
+            await _engine.dispose()
+            logger.info("[Shutdown] ✅ SQLAlchemy engine pool disposed.")
     except Exception as exc:  # noqa: BLE001
-        logger.debug("[Shutdown] Motor client close skipped: %s", exc)
+        logger.debug("[Shutdown] Engine dispose skipped: %s", exc)
     logger.info("[Shutdown] 👋 Goodbye.")
 
 
@@ -164,6 +179,10 @@ A production-ready AI backend that processes invoices through a multi-agent pipe
 """,
     version=settings.APP_VERSION,
     openapi_tags=TAGS_METADATA,
+    servers=[
+        {"url": "https://awake-comfort-production-4bf3.up.railway.app", "description": "Production Server"},
+        {"url": "http://localhost:8000", "description": "Local Development"}
+    ],
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -180,8 +199,7 @@ app.add_middleware(
         "https://autotwin-one.vercel.app",
         "http://localhost:3000",
         "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "*",                           # open for demo; restrict in production
+        "http://127.0.0.1:3000"
     ],
     allow_credentials=True,
     allow_methods=["*"],
