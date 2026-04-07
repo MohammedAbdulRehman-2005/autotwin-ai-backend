@@ -9,7 +9,7 @@ logger = logging.getLogger("autotwin_ai.gemini_client")
 
 # 1. Move configuration to module level
 genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
-MODEL = genai.GenerativeModel("gemini-1.5-flash")
+MODEL = genai.GenerativeModel("gemini-2.5-flash")
 
 def extract_json(text: str):
     """2. Add safe JSON extraction"""
