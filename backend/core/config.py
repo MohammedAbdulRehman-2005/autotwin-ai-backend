@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     HIGH_CONFIDENCE_THRESHOLD: float = 0.95
     MEDIUM_CONFIDENCE_THRESHOLD: float = 0.70
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # API Keys
+    GEMINI_API_KEY: Optional[str] = None
+    GROQ_API_KEY: Optional[str] = None
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()
