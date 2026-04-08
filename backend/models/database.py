@@ -471,3 +471,90 @@ def get_memory_store_snapshot() -> dict:
         "approvals": dict(_approvals_store),
         "logs": dict(_logs_store),
     }
+
+# ──────────────────────────────────────────────────────────────
+# Core Analysis Engine DB Access
+# ──────────────────────────────────────────────────────────────
+
+async def analysis_check_idempotency(document_id: str) -> bool:
+    if _pg_available:
+        rows = await _execute(
+            "SELECT 1 FROM invoice_analysis WHERE document_id = :doc_id LIMIT 1",
+            {"doc_id": document_id}
+        )
+        return len(rows) > 0
+    return False
+
+async def analysis_get_extracted_document(document_id: str) -> Optional[dict]:
+    if _pg_available:
+        rows = await _execute(
+            "SELECT * FROM extracted_documents WHERE id = :doc_id LIMIT 1",
+            {"doc_id": document_id}
+        )
+        return rows[0] if rows else None
+    return None
+
+async def analysis_get_purchase_order(po_number: str) -> Optional[dict]:
+    if _pg_available:
+        rows = await _execute(
+            "SELECT * FROM purchase_orders WHERE po_number = :po LIMIT 1",
+            {"po": po_number}
+        )
+        return rows[0] if rows else None
+    return None
+
+async def analysis_get_vendor_invoices(vendor: str, user_id: str) -> List[dict]:
+    if _pg_available:
+        return await _execute(
+            "SELECT * FROM invoices WHERE vendor = :vendor AND user_id = :uid",
+            {"vendor": vendor, "uid": user_id}
+        )
+    return []
+
+async def analysis_get_user_phone(user_id: str) -> Optional[str]:
+    if _pg_available:
+        try:
+            import uuid
+            uuid.UUID(user_id)
+            rows = await _execute(
+                "SELECT phone FROM users WHERE id = :uid LIMIT 1",
+                {"uid": user_id}
+            )
+            return rows[0]["phone"] if rows and "phone" in rows[0] else None
+        except ValueError:
+            return None
+    return None
+
+async def analysis_check_duplicate_invoice(invoice_id: str, vendor: str, amount: float) -> bool:
+    if _pg_available:
+        # strict duplicate check
+        rows = await _execute(
+            "SELECT 1 FROM invoices WHERE invoice_no = :inv_id OR (vendor = :vendor AND amount = :amount) LIMIT 1",
+            {"inv_id": invoice_id, "vendor": vendor, "amount": amount}
+        )
+        return len(rows) > 0
+    return False
+
+async def analysis_save_results(data: dict) -> None:
+    if _pg_available:
+        flags_json = json.dumps(data.get("flags", []))
+        await _execute(
+            """
+            INSERT INTO invoice_analysis (document_id, user_id, confidence_score, status, flags, processed_at)
+            VALUES (:doc_id, :uid, :score, :status, CAST(:flags AS jsonb), now())
+            """,
+            {
+                "doc_id": data["document_id"],
+                "uid": data["user_id"],
+                "score": data["confidence_score"],
+                "status": data["status"],
+                "flags": flags_json,
+            }
+        )
+        
+        # Also update the document status to processed
+        await _execute(
+            "UPDATE extracted_documents SET status = 'processed' WHERE id = :doc_id",
+            {"doc_id": data["document_id"]}
+        )
+

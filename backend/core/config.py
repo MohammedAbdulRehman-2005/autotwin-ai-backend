@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # CORS Configuration
     CORS_ORIGINS: List[str] = ["https://autotwin-one.vercel.app", "http://localhost:3000"]
 
+    # WhatsApp Integration
+    WHATSAPP_API_URL: str = "http://localhost:3000/send"
+
     # AutoTwin AI Thresholds
     HIGH_CONFIDENCE_THRESHOLD: float = 0.95
     MEDIUM_CONFIDENCE_THRESHOLD: float = 0.70

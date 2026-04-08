@@ -367,7 +367,7 @@ async def demo_run() -> ProcessInvoiceResponse:
 
     No authentication required. Works with zero configuration (demo mode).
     """
-    invoice_id = f"DEMO-{str(uuid4())[:8].upper()}"
+    invoice_id = str(uuid4())
     json_data = {
         "vendor": "TechnoVendor Inc.",
         "amount": 10000.0,
@@ -417,6 +417,44 @@ async def get_invoice_logs(
 
     logger.info("[Routes] /logs/%s → %d entries", invoice_id, len(entries))
     return entries
+
+
+# ══════════════════════════════════════════════════════════════
+# ANALYSIS ENGINE (CORE PROCESSING API)
+# ══════════════════════════════════════════════════════════════
+
+from pydantic import BaseModel
+class AnalysisRequest(BaseModel):
+    document_id: str
+
+@router.post(
+    "/process-invoice-analysis",
+    tags=["Analysis Engine"],
+    summary="Core brain of AutoTwin AI to validate and decide"
+)
+async def analyze_invoice_endpoint(payload: AnalysisRequest) -> Dict[str, Any]:
+    """
+    Receives document_id, fetches extracted invoice data, computes confidence score,
+    makes decision (auto approve/needs review), saves results, and sends WhatsApp notification.
+    """
+    try:
+        from services.analysis_engine import process_invoice_analysis
+        result = await process_invoice_analysis(payload.document_id)
+        return result
+    except Exception as e:
+        logger.error(f"[Routes] Analysis engine failed for document_id {payload.document_id}: {e}")
+        from services.analysis_engine import _fallback_message_generator, send_whatsapp_notification
+        
+        # Safe fallback response
+        # Using a dummy user_phone retrieval since exception context might miss it
+        # Safest is to just return failure gracefully.
+        return {
+            "status": "error",
+            "message": str(e),
+            "document_id": payload.document_id
+        }
+
+
 
 
 # ══════════════════════════════════════════════════════════════
