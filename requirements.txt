@@ -14,3 +14,5 @@ supabase==2.15.1
 asyncpg==0.30.0
 sqlalchemy[asyncio]==2.0.40
 google-generativeai>=0.8.0
+langgraph
+langchain-core
