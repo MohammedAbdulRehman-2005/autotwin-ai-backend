@@ -103,6 +103,35 @@ async def send_whatsapp_notification(phone_number: str, message: str) -> None:
     except Exception as e:
         logger.error(f"Failed to send WhatsApp message: {e}")
 
+async def trigger_local_automation(vendor: str, amount: float, gst: float, invoice_id: str, po_number: str) -> None:
+    """Fires the webhook to the local Playwright automation agent."""
+    import os
+    
+    automation_url = os.getenv("LOCAL_AUTOMATION_URL")
+    if not automation_url:
+        logger.error("❌ LOCAL_AUTOMATION_URL is not set in environment. Cannot trigger local automation.")
+        return
+
+    logger.info("🚀 Triggering automation...")
+    logger.info("📡 Calling ngrok URL...")
+    
+    payload = {
+        "vendor": vendor,
+        "amount": amount,
+        "gst": gst,
+        "invoice_id": invoice_id,
+        "po_number": po_number or "N/A"
+    }
+
+    try:
+         async with httpx.AsyncClient() as client:
+             res = await client.post(automation_url, json=payload, timeout=5.0)
+             res.raise_for_status()
+             logger.info("✅ Successfully triggered local automation via ngrok.")
+    except Exception as e:
+         logger.error(f"❌ Failed to trigger local automation: {e}")
+
+
 
 async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
     """
@@ -199,5 +228,9 @@ async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
     wa_message = await generate_whatsapp_message(flags, amount, avg_past_amount, score, status)
     if user_phone:
         await send_whatsapp_notification(user_phone, wa_message)
+
+    # 10. Trigger Local ERP Automation if auto approved
+    if status == "auto_approved":
+        await trigger_local_automation(vendor, amount, gst, invoice_id, po_number)
 
     return result_data

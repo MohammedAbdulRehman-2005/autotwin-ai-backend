@@ -270,6 +270,22 @@ async def approve_invoice(
         date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         anomaly=not body.approved,
     )
+    
+    if body.approved:
+        from services.analysis_engine import trigger_local_automation
+        amount_to_send = body.updated_amount or float(existing.get("amount", 0.0))
+        gst_to_send = float(existing.get("gst", 0.0))
+        po_number_to_send = existing.get("po_number", "")
+        
+        # In the background or awaited: we trigger the same physical automation
+        await trigger_local_automation(
+            vendor=vendor,
+            amount=amount_to_send,
+            gst=gst_to_send,
+            invoice_id=body.invoice_id,
+            po_number=po_number_to_send
+        )
+
     logger.info(
         "[Routes] /approve | id=%s approved=%s new_confidence=%.2f",
         body.invoice_id, body.approved, updated_confidence,
