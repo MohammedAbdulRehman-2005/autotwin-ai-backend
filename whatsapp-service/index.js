@@ -8,6 +8,9 @@ const Groq = require('groq-sdk');
 const app = express();
 app.use(express.json());
 
+// Railway Health Check
+app.get('/health', (req, res) => res.status(200).send('OK'));
+
 const PORT = process.env.PORT || 3001;
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
 

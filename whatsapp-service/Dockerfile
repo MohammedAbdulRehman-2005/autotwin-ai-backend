@@ -1,25 +1,38 @@
-# ── Stage 1: Base with Chromium system dependencies ──────────────────────────
-FROM node:22-slim
+FROM node:18-slim
 
-# Install Chromium and all its shared library dependencies via apt
+# Install Chromium + required shared libs for headless browser on Debian slim
 RUN apt-get update && apt-get install -y \
     chromium \
+    ca-certificates \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Tell Puppeteer/whatsapp-web.js to skip downloading its own Chrome
+# Skip Puppeteer's bundled Chrome download — use system Chromium instead
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Copy package files and install Node deps
+# Install dependencies
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --only=production
 
-# Copy application source
+# Copy source
 COPY . .
 
-EXPOSE 8080
+# Railway injects PORT at runtime — use it in index.js via process.env.PORT
+EXPOSE 3001
 
 CMD ["node", "index.js"]
