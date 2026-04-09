@@ -2,14 +2,17 @@ import os
 import json
 import re
 import asyncio
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import logging
 
 logger = logging.getLogger("autotwin_ai.gemini_client")
 
-# 1. Move configuration to module level
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
-MODEL = genai.GenerativeModel("gemini-2.5-flash")
+def _get_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not set.")
+    return genai.Client(api_key=api_key)
 
 def extract_json(text: str):
     """2. Add safe JSON extraction"""
@@ -37,8 +40,7 @@ async def extract_with_gemini(image_bytes: bytes) -> dict:
     Extract invoice data using Gemini Vision.
     Runs asynchronously wrapping the blocking SDK call.
     """
-    if not os.getenv("GEMINI_API_KEY"):
-        raise ValueError("GEMINI_API_KEY is not set.")
+    client = _get_client()
 
     prompt = """You are an AI system specialized in invoice extraction.
 
@@ -64,12 +66,15 @@ Rules:
         mime_type = "application/pdf"
 
     contents = [
-        {"mime_type": mime_type, "data": image_bytes},
+        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
         prompt
     ]
 
     def _call_gemini():
-        return MODEL.generate_content(contents)
+        return client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents
+        )
 
     # 4. Add retry logic (2 attempts max)
     logger.info("Gemini extraction started")
