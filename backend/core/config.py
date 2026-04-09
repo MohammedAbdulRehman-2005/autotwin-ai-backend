@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # WhatsApp Integration
     WHATSAPP_API_URL: str = "http://localhost:3001/api/send"
-    WHATSAPP_DEFAULT_NUMBER: str = ""  # Fallback when DB phone lookup fails, e.g. 919876543210
+    WHATSAPP_DEFAULT_NUMBER: str = "917036970010"  # Fallback when DB phone lookup fails
 
     # AutoTwin AI Thresholds
     HIGH_CONFIDENCE_THRESHOLD: float = 0.95
