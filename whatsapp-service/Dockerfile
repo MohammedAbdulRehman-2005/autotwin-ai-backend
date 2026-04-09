@@ -32,7 +32,4 @@ RUN npm ci --only=production
 # Copy source
 COPY . .
 
-# Railway injects PORT at runtime — use it in index.js via process.env.PORT
-EXPOSE 3001
-
 CMD ["node", "index.js"]
