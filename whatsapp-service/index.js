@@ -450,4 +450,4 @@ app.post('/api/daily-summary', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`🚀 REST API Server running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 REST API Server running on port ${PORT}`));
