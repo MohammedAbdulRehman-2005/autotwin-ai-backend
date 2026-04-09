@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["https://autotwin-one.vercel.app", "http://localhost:3000"]
 
     # WhatsApp Integration
-    WHATSAPP_API_URL: str = "http://localhost:3001/api/send"
+    WHATSAPP_API_URL: str = "https://autotwin-ai-backend-production.up.railway.app/api/send"
     WHATSAPP_DEFAULT_NUMBER: str = "917036970010"  # Fallback when DB phone lookup fails
 
     # AutoTwin AI Thresholds
