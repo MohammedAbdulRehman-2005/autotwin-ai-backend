@@ -171,10 +171,21 @@ class Orchestrator:
         pipeline_logger = state.get("logger")
         
         try:
+            gemini_extracted = raw_input.get("json_data")
+            file_bytes = raw_input.get("file_bytes")
+            
+            if file_bytes:
+                pipeline_logger.log("extraction", "Invoking Gemini Vision model...", "info")
+                try:
+                    # extract_with_gemini returns a JSON dict (vendor, amount, date, currency)
+                    gemini_extracted = await extract_with_gemini(file_bytes)
+                except Exception as eval_exc:
+                    logger.error(f"[Orchestrator] Gemini Vision failed: {eval_exc}")
+
             # Fallback legacy logic adapted for structural compliance
             ext_obj = await self.vision_agent.extract(
                 file_content=raw_input.get("file_content"),
-                json_data=raw_input.get("json_data")
+                json_data=gemini_extracted
             )
             extraction_dict = ext_obj.model_dump()
             
