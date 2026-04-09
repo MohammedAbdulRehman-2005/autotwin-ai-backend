@@ -50,9 +50,18 @@ const client = new Client({
       ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
       : {}),
     args: [
-      "--no-sandbox", "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage", "--disable-accelerated-2d-canvas",
-      "--no-first-run", "--no-zygote", "--disable-gpu"
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu",
+      "--disable-site-isolation-trials",
+      "--disable-software-rasterizer",
+      "--disable-extensions",
+      "--memory-pressure-off",
+      "--single-process"
     ]
   }
 });
