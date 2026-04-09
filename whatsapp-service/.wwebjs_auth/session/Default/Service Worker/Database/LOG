@@ -1,3 +1,2 @@
-2026/04/09-00:02:11.427 1850 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Service Worker\Database/MANIFEST-000001
-2026/04/09-00:02:11.428 1850 Recovering log #3
-2026/04/09-00:02:11.428 1850 Reusing old log C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Service Worker\Database/000003.log 
+2026/04/09-10:12:06.330 31f4 Creating DB C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Service Worker\Database since it was missing.
+2026/04/09-10:12:06.336 31f4 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Service Worker\Database/MANIFEST-000001

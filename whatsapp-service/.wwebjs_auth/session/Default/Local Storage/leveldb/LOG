@@ -1,3 +1,2 @@
-2026/04/09-00:02:11.438 350c Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Local Storage\leveldb/MANIFEST-000001
-2026/04/09-00:02:11.445 350c Recovering log #3
-2026/04/09-00:02:11.448 350c Reusing old log C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Local Storage\leveldb/000003.log 
+2026/04/09-10:12:03.317 8c0 Creating DB C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Local Storage\leveldb since it was missing.
+2026/04/09-10:12:03.344 8c0 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Local Storage\leveldb/MANIFEST-000001

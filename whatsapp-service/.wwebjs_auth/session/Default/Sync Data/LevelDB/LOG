@@ -1,3 +1,2 @@
-2026/04/09-00:02:11.427 3c30 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Sync Data\LevelDB/MANIFEST-000001
-2026/04/09-00:02:11.428 3c30 Recovering log #3
-2026/04/09-00:02:11.428 3c30 Reusing old log C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Sync Data\LevelDB/000003.log 
+2026/04/09-10:12:03.179 de0 Creating DB C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Sync Data\LevelDB since it was missing.
+2026/04/09-10:12:03.205 de0 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\Sync Data\LevelDB/MANIFEST-000001

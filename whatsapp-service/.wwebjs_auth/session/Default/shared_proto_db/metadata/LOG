@@ -1,3 +1,2 @@
-2026/04/09-00:02:11.508 3c30 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\shared_proto_db\metadata/MANIFEST-000001
-2026/04/09-00:02:11.509 3c30 Recovering log #3
-2026/04/09-00:02:11.510 3c30 Reusing old log C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\shared_proto_db\metadata/000003.log 
+2026/04/09-10:12:03.227 3154 Creating DB C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\shared_proto_db\metadata since it was missing.
+2026/04/09-10:12:03.244 3154 Reusing MANIFEST C:\Users\lenov\Desktop\autotwin AI backend\whatsapp-service\.wwebjs_auth\session\Default\shared_proto_db\metadata/MANIFEST-000001
