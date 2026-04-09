@@ -11,6 +11,28 @@ app.use(express.json());
 // Railway Health Check
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
+let latestQR = null;
+
+// QR Code Web Endpoint
+app.get('/qr', async (req, res) => {
+  if (!latestQR) {
+    return res.send('<h2>WhatsApp is currently connected or starting up! If you need to scan a QR code, please wait a moment and refresh.</h2>');
+  }
+  try {
+    const qrcodeImg = require('qrcode');
+    const url = await qrcodeImg.toDataURL(latestQR);
+    res.send(`
+      <div style="font-family: sans-serif; text-align: center; margin-top: 50px;">
+        <h2>Scan this QR code with WhatsApp</h2>
+        <img src="${url}" style="width: 300px; height: 300px; border: 2px solid #ccc; border-radius: 10px;" />
+        <p>Refresh this page if it times out.</p>
+      </div>
+    `);
+  } catch (err) {
+    res.status(500).send('Error generating QR Image');
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
 
@@ -36,13 +58,19 @@ const client = new Client({
 });
 
 client.on('qr', (qr) => {
+  latestQR = qr;
   console.log('\n=========================================');
-  console.log('📱 SCAN THIS QR CODE WITH WHATSAPP:');
+  console.log('📌 NEW QR CODE GENERATED!');
+  console.log('🌐 OPEN YOUR DEPLOYMENT URL + /qr TO SCAN IT AS AN IMAGE!');
+  console.log('Example: https://your-railway-app.up.railway.app/qr');
   console.log('=========================================\n');
   qrcode.generate(qr, { small: true });
 });
 
-client.on('ready', () => console.log('✅ WhatsApp Web Client is READY!'));
+client.on('ready', () => {
+  latestQR = null;
+  console.log('✅ WhatsApp Web Client is READY!');
+});
 
 // ══════════════════════════════════════════════════════════════
 // INTENT-SPECIFIC DATA FETCHERS
