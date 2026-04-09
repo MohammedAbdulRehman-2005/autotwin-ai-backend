@@ -1,9 +1,10 @@
 require('dotenv').config();
 const express = require('express');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { createClient } = require('@supabase/supabase-js');
 const Groq = require('groq-sdk');
+const pino = require('pino');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
@@ -12,6 +13,7 @@ app.use(express.json());
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
 let latestQR = null;
+let sock = null; // Global socket instance
 
 // QR Code Web Endpoint
 app.get('/qr', async (req, res) => {
@@ -40,46 +42,6 @@ const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
 // ── Clients ─────────────────────────────────────────────────
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-// ── WhatsApp Setup ───────────────────────────────────────────
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: ".wwebjs_auth" }),
-  puppeteer: {
-    headless: true,
-    ...(process.env.PUPPETEER_EXECUTABLE_PATH
-      ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
-      : {}),
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-accelerated-2d-canvas",
-      "--no-first-run",
-      "--no-zygote",
-      "--disable-gpu",
-      "--disable-site-isolation-trials",
-      "--disable-software-rasterizer",
-      "--disable-extensions",
-      "--memory-pressure-off",
-      "--single-process"
-    ]
-  }
-});
-
-client.on('qr', (qr) => {
-  latestQR = qr;
-  console.log('\n=========================================');
-  console.log('📌 NEW QR CODE GENERATED!');
-  console.log('🌐 OPEN YOUR DEPLOYMENT URL + /qr TO SCAN IT AS AN IMAGE!');
-  console.log('Example: https://your-railway-app.up.railway.app/qr');
-  console.log('=========================================\n');
-  qrcode.generate(qr, { small: true });
-});
-
-client.on('ready', () => {
-  latestQR = null;
-  console.log('✅ WhatsApp Web Client is READY!');
-});
 
 // ══════════════════════════════════════════════════════════════
 // INTENT-SPECIFIC DATA FETCHERS
@@ -339,92 +301,142 @@ What would you like to know?
 // WHATSAPP MESSAGE HANDLER
 // ══════════════════════════════════════════════════════════════
 
-client.on('message', async msg => {
-  try {
-    const text = msg.body.trim();
-    const upper = text.toUpperCase();
+// ══════════════════════════════════════════════════════════════
+// WHATSAPP CONNECTION & MESSAGE HANDLER (BAILEYS)
+// ══════════════════════════════════════════════════════════════
 
-    // ── 1. APPROVAL HANDLER ─────────────────────────────────
-    // Handles: "APPROVE <document_id>" or "REJECT <document_id>"
-    const approveMatch = upper.match(/^(APPROVE|REJECT)\s+([\w-]+)$/);
-    if (approveMatch) {
-      const action   = approveMatch[1];
-      const docId    = approveMatch[2];
-      const approved = action === 'APPROVE';
-      console.log(`\ud83d\udcdd Approval reply: ${action} for document_id=${docId}`);
-      try {
-        const axios = require('axios');
-        const resp = await axios.post(`${FASTAPI_URL}/api/approve`, {
-          invoice_id: docId,
-          approved: approved,
-          reviewer_notes: `WhatsApp ${action.toLowerCase()} by ${msg.from}`
-        });
-        const d = resp.data;
-        const confirmMsg = approved
-          ? `\u2705 Invoice *${docId}* has been *Approved*\n\ud83d\udcca New confidence: ${(d.updated_confidence * 100).toFixed(0)}%\n${d.message}`
-          : `\u274c Invoice *${docId}* has been *Rejected*\n\ud83d\udccc Flagged for re-processing.\n${d.message}`;
-        await msg.reply(confirmMsg);
-        return;
-      } catch (err) {
-        console.error('\u274c FastAPI approval callback failed:', err.message);
-        await msg.reply(`\u26a0\ufe0f Could not process your ${action} request. Please use the dashboard.`);
-        return;
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState('.baileys_auth');
+
+  sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: true,
+    logger: pino({ level: 'silent' }), // Disable verbose logging
+    browser: ["AutoTwin AI", "Chrome", "1.0.0"],
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) {
+      latestQR = qr;
+      console.log('\n=========================================');
+      console.log('📌 NEW QR CODE GENERATED!');
+      console.log('🌐 OPEN YOUR DEPLOYMENT URL + /qr TO SCAN IT AS AN IMAGE!');
+      console.log('=========================================\n');
+    }
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('Connection closed. Reconnecting:', shouldReconnect);
+      if (shouldReconnect) {
+        connectToWhatsApp();
       }
+    } else if (connection === 'open') {
+      latestQR = null;
+      console.log('✅ WhatsApp Web Client is READY!');
     }
+  });
 
-    // ── 2. MENU & INTENT ROUTING ─────────────────────────────
-    const intent = detectIntent(text);
-    console.log(`\ud83d\udce5 Message: "${text}" \u2192 intent: ${intent || 'none'}`);
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      const msg = m.messages[0];
+      if (!msg.message || msg.key.fromMe) return;
 
-    if (intent === 'menu' || !intent) {
-      return await msg.reply(MENU);
+      const sender = msg.key.remoteJid;
+      const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+      if (!text) return;
+
+      const trimmedText = text.trim();
+      const upper = trimmedText.toUpperCase();
+
+      const reply = async (replyText) => {
+        await sock.sendMessage(sender, { text: replyText }, { quoted: msg });
+      };
+
+      // ── 1. APPROVAL HANDLER ─────────────────────────────────
+      const approveMatch = upper.match(/^(APPROVE|REJECT)\s+([\w-]+)$/);
+      if (approveMatch) {
+        const action   = approveMatch[1];
+        const docId    = approveMatch[2];
+        const approved = action === 'APPROVE';
+        console.log(`\ud83d\udcdd Approval reply: ${action} for document_id=${docId}`);
+        try {
+          const resp = await axios.post(`${FASTAPI_URL}/api/approve`, {
+            invoice_id: docId,
+            approved: approved,
+            reviewer_notes: `WhatsApp ${action.toLowerCase()} by ${sender.split('@')[0]}`
+          });
+          const d = resp.data;
+          const confirmMsg = approved
+            ? `\u2705 Invoice *${docId}* has been *Approved*\n\ud83d\udcca New confidence: ${(d.updated_confidence * 100).toFixed(0)}%\n${d.message}`
+            : `\u274c Invoice *${docId}* has been *Rejected*\n\ud83d\udccc Flagged for re-processing.\n${d.message}`;
+          await reply(confirmMsg);
+          return;
+        } catch (err) {
+          console.error('\u274c FastAPI approval callback failed:', err.message);
+          await reply(`\u26a0\ufe0f Could not process your ${action} request. Please use the dashboard.`);
+          return;
+        }
+      }
+
+      // ── 2. MENU & INTENT ROUTING ─────────────────────────────
+      const intent = detectIntent(trimmedText);
+      console.log(`\ud83d\udce5 Message: "${trimmedText}" \u2192 intent: ${intent || 'none'}`);
+
+      if (intent === 'menu' || !intent) {
+        return await reply(MENU);
+      }
+
+      const loadingMessages = {
+        invoice_summary: '\ud83d\udcc4 Fetching invoice details...',
+        payment_status:  '\ud83d\udcb0 Checking payment records...',
+        daily_report:    '\ud83d\udcca Building your daily report...',
+        anomaly_details: '\ud83d\udd0d Scanning anomalies...',
+        pending_review:  '\ud83d\udd52 Fetching pending reviews...',
+        cash_flow:       '\ud83d\udcb9 Analysing cash flow...',
+      };
+
+      await reply(loadingMessages[intent] || '\u23f3 Processing...');
+
+      let data;
+      switch (intent) {
+        case 'invoice_summary': data = await fetchInvoiceSummary(); break;
+        case 'payment_status':  data = await fetchPaymentStatus();  break;
+        case 'daily_report':    data = await fetchDailyReport();    break;
+        case 'anomaly_details': data = await fetchAnomalyDetails(); break;
+        case 'pending_review':  data = await fetchPendingReview();  break;
+        case 'cash_flow':       data = await fetchCashFlowData();   break;
+        default: data = await fetchInvoiceSummary();
+      }
+
+      const response = await generatePersonalisedResponse(data, trimmedText);
+      console.log('\ud83d\udce4 Sending personalised response...');
+      await reply(response);
+
+    } catch (err) {
+      console.error('\u274c Message handler error:', err);
     }
+  });
+}
 
-    const loadingMessages = {
-      invoice_summary: '\ud83d\udcc4 Fetching invoice details...',
-      payment_status:  '\ud83d\udcb0 Checking payment records...',
-      daily_report:    '\ud83d\udcca Building your daily report...',
-      anomaly_details: '\ud83d\udd0d Scanning anomalies...',
-      pending_review:  '\ud83d\udd52 Fetching pending reviews...',
-      cash_flow:       '\ud83d\udcb9 Analysing cash flow...',
-    };
-
-    await msg.reply(loadingMessages[intent] || '\u23f3 Processing...');
-
-    let data;
-    switch (intent) {
-      case 'invoice_summary': data = await fetchInvoiceSummary(); break;
-      case 'payment_status':  data = await fetchPaymentStatus();  break;
-      case 'daily_report':    data = await fetchDailyReport();    break;
-      case 'anomaly_details': data = await fetchAnomalyDetails(); break;
-      case 'pending_review':  data = await fetchPendingReview();  break;
-      case 'cash_flow':       data = await fetchCashFlowData();   break;
-      default: data = await fetchInvoiceSummary();
-    }
-
-    const response = await generatePersonalisedResponse(data, text);
-    console.log('\ud83d\udce4 Sending personalised response...');
-    await msg.reply(response);
-
-  } catch (err) {
-    console.error('\u274c Message handler error:', err);
-    await msg.reply('\u26a0\ufe0f AutoTwin AI encountered an error. Please try again.');
-  }
-});
-
-client.initialize();
+connectToWhatsApp();
 
 // ══════════════════════════════════════════════════════════════
 // REST API ENDPOINTS
 // ══════════════════════════════════════════════════════════════
 
-// Direct send (used by Python analysis engine)
+const formatJid = (number) => {
+  if (number.includes('@s.whatsapp.net')) return number;
+  if (number.includes('@c.us')) return number.replace('@c.us', '@s.whatsapp.net');
+  return `${number}@s.whatsapp.net`;
+};
+
 app.post('/send', async (req, res) => {
   try {
     const { number, message } = req.body;
     if (!number || !message) return res.status(400).json({ error: "Missing number or message" });
-    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
-    await client.sendMessage(chatId, message);
+    if (sock) await sock.sendMessage(formatJid(number), { text: message });
     res.json({ success: true, message: "Sent!" });
   } catch (e) {
     console.error('POST /send error:', e);
@@ -432,13 +444,11 @@ app.post('/send', async (req, res) => {
   }
 });
 
-// Legacy endpoint kept for compatibility
 app.post('/api/send', async (req, res) => {
   try {
     const { number, message } = req.body;
     if (!number || !message) return res.status(400).json({ error: "Missing number or message" });
-    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
-    await client.sendMessage(chatId, message);
+    if (sock) await sock.sendMessage(formatJid(number), { text: message });
     res.json({ success: true, message: "Sent!" });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -449,10 +459,9 @@ app.post('/api/daily-summary', async (req, res) => {
   try {
     const { number } = req.body;
     if (!number) return res.status(400).json({ error: "Missing number" });
-    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
     const data = await fetchDailyReport();
     const summary = await generatePersonalisedResponse(data, "Generate a daily automated report.");
-    await client.sendMessage(chatId, summary);
+    if (sock) await sock.sendMessage(formatJid(number), { text: summary });
     res.json({ success: true, summary_sent: summary });
   } catch (e) {
     res.status(500).json({ error: e.message });
