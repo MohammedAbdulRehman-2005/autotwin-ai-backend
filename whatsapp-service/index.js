@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { createClient } = require('@supabase/supabase-js');
 const Groq = require('groq-sdk');
 const pino = require('pino');
@@ -307,10 +307,12 @@ What would you like to know?
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('.baileys_auth');
+  const { version, isLatest } = await fetchLatestBaileysVersion();
+  console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`);
 
   sock = makeWASocket({
+    version,
     auth: state,
-    printQRInTerminal: true,
     logger: pino({ level: 'silent' }), // Disable verbose logging
     browser: ["AutoTwin AI", "Chrome", "1.0.0"],
   });
