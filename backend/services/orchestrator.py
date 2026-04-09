@@ -387,6 +387,32 @@ class Orchestrator:
         
         state.get("logger").log("complete", "Pipeline concluded organically.", "success")
 
+        # ── Send WhatsApp notification ────────────────────────────────────
+        try:
+            from services.analysis_engine import send_whatsapp_notification, generate_whatsapp_message
+            ext = state.get("extraction_result", {})
+            anomaly_dict = state.get("anomaly_result", {})
+            confidence_score = state.get("confidence_score", 0.0)
+            decision = state.get("decision", "human_required")
+            
+            # Build flags list from anomaly result
+            flags = []
+            if anomaly_dict.get("is_anomaly"):
+                flags.append("price_spike")
+                
+            confidence_pct = int(round(confidence_score * 100 if confidence_score <= 1.0 else confidence_score))
+            wa_message = await generate_whatsapp_message(
+                flags=flags,
+                amount=ext.get("amount", 0.0),
+                avg=0.0,
+                confidence=confidence_pct,
+                status="auto_approved" if decision == "auto_execute" else "needs_review",
+            )
+            await send_whatsapp_notification(phone_number="", message=wa_message)
+            logger.info("[Orchestrator] WhatsApp notification dispatched.")
+        except Exception as wa_exc:
+            logger.warning("[Orchestrator] WhatsApp notification failed (non-fatal): %s", wa_exc)
+
         return {"terminate": True, "trace": trace}
 
     # ══════════════════════════════════════════════════════════

@@ -86,16 +86,18 @@ def _fallback_message_generator(flags: List[str], amount: float, avg: float, con
     return msg
 
 async def send_whatsapp_notification(phone_number: str, message: str) -> None:
-    if not phone_number:
-        logger.warning("No phone number found, skipping WhatsApp notification.")
+    # Fall back to the configured default number if phone_number is empty
+    target = phone_number or settings.WHATSAPP_DEFAULT_NUMBER
+    if not target:
+        logger.warning("No phone number found and WHATSAPP_DEFAULT_NUMBER not set — skipping WhatsApp notification.")
         return
         
-    logger.info(f"📤 Sending WhatsApp notification to {phone_number}...")
+    logger.info(f"📤 Sending WhatsApp notification to {target}...")
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
                 settings.WHATSAPP_API_URL,
-                json={"number": phone_number, "message": message},
+                json={"number": target, "message": message},
                 timeout=10.0
             )
             res.raise_for_status()

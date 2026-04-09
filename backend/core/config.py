@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # Security
-    SECRET_KEY: str = "your-secret-key-change-in-production"
+    SECRET_KEY: str = "VVPChl1amGDVNr4BjemaIEN-OoC0XQ11aEyNy258dNY"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["https://autotwin-one.vercel.app", "http://localhost:3000"]
 
     # WhatsApp Integration
-    WHATSAPP_API_URL: str = "http://localhost:3000/send"
+    WHATSAPP_API_URL: str = "http://localhost:3001/api/send"
+    WHATSAPP_DEFAULT_NUMBER: str = ""  # Fallback when DB phone lookup fails, e.g. 919876543210
 
     # AutoTwin AI Thresholds
     HIGH_CONFIDENCE_THRESHOLD: float = 0.95
