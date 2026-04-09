@@ -494,6 +494,20 @@ async def analysis_get_extracted_document(document_id: str) -> Optional[dict]:
         return rows[0] if rows else None
     return None
 
+async def analysis_get_document_by_invoice_id(invoice_id: str) -> Optional[dict]:
+    """Fetch extracted_document by the orchestrator's invoice UUID (invoice_id column)."""
+    if _pg_available:
+        rows = await _execute(
+            "SELECT * FROM extracted_documents WHERE invoice_id = :inv_id ORDER BY created_at DESC LIMIT 1",
+            {"inv_id": invoice_id}
+        )
+        if rows:
+            row = rows[0]
+            # Expose the document's own primary key as 'document_id'
+            row["document_id"] = str(row.get("id", ""))
+            return row
+    return None
+
 async def analysis_get_purchase_order(po_number: str) -> Optional[dict]:
     if _pg_available:
         rows = await _execute(

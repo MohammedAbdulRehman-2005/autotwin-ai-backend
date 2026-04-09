@@ -384,34 +384,22 @@ class Orchestrator:
     async def finalizer_node(self, state: AgentState) -> dict:
         trace = list(state.get("trace", []))
         trace.append({"node": "finalizer_node", "status": "success", "details": "Closing output pipeline"})
-        
-        state.get("logger").log("complete", "Pipeline concluded organically.", "success")
+        pipeline_logger = state.get("logger")
+        pipeline_logger.log("complete", "Pipeline concluded organically.", "success")
 
-        # ── Send WhatsApp notification ────────────────────────────────────
+        # ── Auto-trigger full analysis engine (WhatsApp + DB) ────────────────
         try:
-            from services.analysis_engine import send_whatsapp_notification, generate_whatsapp_message
-            ext = state.get("extraction_result", {})
-            anomaly_dict = state.get("anomaly_result", {})
-            confidence_score = state.get("confidence_score", 0.0)
-            decision = state.get("decision", "human_required")
-            
-            # Build flags list from anomaly result
-            flags = []
-            if anomaly_dict.get("is_anomaly"):
-                flags.append("price_spike")
-                
-            confidence_pct = int(round(confidence_score * 100 if confidence_score <= 1.0 else confidence_score))
-            wa_message = await generate_whatsapp_message(
-                flags=flags,
-                amount=ext.get("amount", 0.0),
-                avg=0.0,
-                confidence=confidence_pct,
-                status="auto_approved" if decision == "auto_execute" else "needs_review",
-            )
-            await send_whatsapp_notification(phone_number="", message=wa_message)
-            logger.info("[Orchestrator] WhatsApp notification dispatched.")
+            from services.analysis_engine import process_invoice_analysis_by_invoice_id
+            invoice_id = state.get("invoice_id", "")
+            if invoice_id:
+                logger.info("[Orchestrator] Auto-triggering analysis for invoice_id=%s", invoice_id)
+                analysis_result = await process_invoice_analysis_by_invoice_id(invoice_id)
+                logger.info("[Orchestrator] Analysis complete: status=%s score=%s",
+                            analysis_result.get("status"), analysis_result.get("confidence_score"))
+            else:
+                logger.warning("[Orchestrator] No invoice_id in state — skipping analysis auto-trigger.")
         except Exception as wa_exc:
-            logger.warning("[Orchestrator] WhatsApp notification failed (non-fatal): %s", wa_exc)
+            logger.warning("[Orchestrator] Analysis auto-trigger failed (non-fatal): %s", wa_exc)
 
         return {"terminate": True, "trace": trace}
 

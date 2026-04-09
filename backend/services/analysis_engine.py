@@ -1,11 +1,27 @@
+"""
+services/analysis_engine.py
+────────────────────────────
+Core brain of AutoTwin AI.
+
+Steps:
+1. Idempotency check
+2. Fetch document from extracted_documents
+3. Fetch PO, vendor history, user phone
+4. Run 5 validation rules → confidence score + flags
+5. Decide: auto_approved (>=80) or needs_review
+6. Save results to invoice_analysis + update doc status
+7. Send personalized WhatsApp message
+   - If needs_review: append APPROVE/REJECT prompt
+"""
 import logging
 import httpx
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from core.config import settings
 from models.database import (
     analysis_check_idempotency,
     analysis_get_extracted_document,
+    analysis_get_document_by_invoice_id,
     analysis_get_purchase_order,
     analysis_get_vendor_invoices,
     analysis_get_user_phone,
@@ -15,34 +31,62 @@ from models.database import (
 
 logger = logging.getLogger("autotwin_ai.analysis_engine")
 
-async def generate_whatsapp_message(
-    flags: List[str], amount: float, avg: float, confidence: int, status: str
-) -> str:
-    """Generate dynamic WhatsApp message using Groq LLM based on extracted flags."""
-    if not settings.GROQ_API_KEY:
-        logger.warning("GROQ_API_KEY not set. Using fallback WhatsApp message generator.")
-        return _fallback_message_generator(flags, amount, avg, confidence, status)
+# ──────────────────────────────────────────────────────────────
+# WhatsApp Message Generator (Groq LLM + fallback)
+# ──────────────────────────────────────────────────────────────
 
-    prompt = f"""
-    You are AutoTwin AI, an invoice processing assistant. 
-    Write a short, professional, and structured WhatsApp status message for an invoice analysis.
-    Use emojis. 
-    
-    Data:
-    - Flags: {', '.join(flags) if flags else 'None'}
-    - Amount: ₹{amount}
-    - Historical Avg: ₹{avg:.2f}
-    - Confidence: {confidence}%
-    - Status: {status}
-    
-    Follow this exact format roughly:
-    📊 AutoTwin Invoice Analysis
-    [Checkmarks for good things. Warning signs for flags like price spike or gst invalid or duplicate]
-    💰 Amount: ₹[Amount]
-    📈 Avg: ₹[Avg]
-    ⚡ Confidence: [Confidence]%
-    ✅/❗ Status: [Status]
-    """
+async def generate_whatsapp_message(
+    flags: List[str],
+    amount: float,
+    avg: float,
+    confidence: int,
+    status: str,
+    doc: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Generate a rich, dynamic WhatsApp summary using Groq LLM."""
+    doc = doc or {}
+    vendor       = doc.get("vendor", "Unknown")
+    company      = doc.get("company", "")
+    invoice_no   = doc.get("invoice_no", "")
+    gst_rate     = doc.get("gst_rate", 0.0)
+    gst_amount   = doc.get("gst_amount", 0.0)
+    subtotal     = doc.get("subtotal", 0.0)
+    due_date     = doc.get("due_date", "")
+    payment_terms = doc.get("payment_terms", "")
+    notes        = doc.get("notes", "")
+
+    if not settings.GROQ_API_KEY:
+        logger.warning("GROQ_API_KEY not set — using fallback message.")
+        return _fallback_message(flags, amount, avg, confidence, status, doc)
+
+    prompt = f"""You are AutoTwin AI, an invoice analysis assistant. 
+Write a concise, professional WhatsApp message summarizing this invoice analysis.
+Use emojis. Be specific to the actual data — no generic text.
+
+Invoice Data:
+- Vendor: {vendor}
+- Company (buyer): {company or 'N/A'}
+- Invoice No: {invoice_no or 'N/A'}
+- Subtotal: ₹{subtotal}
+- GST: {gst_rate}% = ₹{gst_amount}
+- Total: ₹{amount}
+- Historical Avg: ₹{avg:.2f}
+- Due Date: {due_date or 'N/A'}
+- Payment Terms: {payment_terms or 'N/A'}
+- Notes: {notes or 'None'}
+- Flags: {', '.join(flags) if flags else 'None'}
+- Confidence Score: {confidence}%
+- Decision: {status}
+
+Format (follow roughly):
+📄 AutoTwin Invoice Alert
+[vendor + invoice no]
+[key financial breakdown with GST]
+[any flags as warnings]
+⚡ Confidence: X%
+[Status line]
+
+Keep it under 220 words. WhatsApp-friendly (no markdown headers)."""
 
     try:
         async with httpx.AsyncClient() as client:
@@ -50,133 +94,140 @@ async def generate_whatsapp_message(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile", 
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.2,
+                    "max_tokens": 350,
                 },
-                timeout=10.0
+                timeout=12.0,
             )
             response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            return response.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        logger.error(f"Failed to generate WhatsApp message with Groq: {e}")
-        return _fallback_message_generator(flags, amount, avg, confidence, status)
+        logger.error(f"Groq message generation failed: {e}")
+        return _fallback_message(flags, amount, avg, confidence, status, doc)
 
-def _fallback_message_generator(flags: List[str], amount: float, avg: float, confidence: int, status: str) -> str:
-    msg = "📊 AutoTwin Invoice Analysis\n\n"
-    if not flags:
-        msg += "✔ No anomalies detected\n"
-    else:
-        for f in flags:
-            if f == "price_spike":
-                msg += "⚠ Price spike detected\n"
-            elif f == "gst_invalid":
-                msg += "⚠ Invalid GST detected\n"
-            elif f == "duplicate":
-                msg += "⚠ Duplicate invoice detected\n"
-    msg += f"💰 Amount: ₹{amount}\n"
+
+def _fallback_message(
+    flags: List[str],
+    amount: float,
+    avg: float,
+    confidence: int,
+    status: str,
+    doc: Dict[str, Any],
+) -> str:
+    vendor     = doc.get("vendor", "Unknown")
+    invoice_no = doc.get("invoice_no", "")
+    gst_rate   = doc.get("gst_rate", 0.0)
+    gst_amount = doc.get("gst_amount", 0.0)
+    subtotal   = doc.get("subtotal", 0.0)
+    due_date   = doc.get("due_date", "")
+
+    lines = ["📄 *AutoTwin Invoice Alert*\n"]
+    lines.append(f"🏢 Vendor: {vendor}" + (f" | Invoice #{invoice_no}" if invoice_no else ""))
+    if subtotal:
+        lines.append(f"💵 Subtotal: ₹{subtotal:,.2f}")
+    if gst_rate:
+        lines.append(f"🧾 GST ({gst_rate}%): ₹{gst_amount:,.2f}")
+    lines.append(f"💰 Total: ₹{amount:,.2f}")
     if avg > 0:
-        msg += f"📈 Avg: ₹{avg:.2f}\n"
-    msg += f"⚡ Confidence: {confidence}%\n"
-    msg += f"{'✅' if status == 'auto_approved' else '❗'} Status: {'Auto Approved' if status == 'auto_approved' else 'Needs Review'}\n"
-    return msg
+        diff_pct = ((amount - avg) / avg * 100) if avg else 0
+        trend = f"(+{diff_pct:.1f}% vs avg)" if diff_pct > 0 else f"({diff_pct:.1f}% vs avg)"
+        lines.append(f"📈 Historical Avg: ₹{avg:,.2f} {trend}")
+    if due_date:
+        lines.append(f"📅 Due: {due_date}")
+
+    lines.append("")
+    for flag in flags:
+        if flag == "price_spike":
+            lines.append("⚠️ Price spike detected (>1.5× avg)")
+        elif flag == "gst_invalid":
+            lines.append("⚠️ Invalid GST rate (outside 0-28%)")
+        elif flag == "duplicate":
+            lines.append("⚠️ Possible duplicate invoice")
+        elif flag == "no_po":
+            lines.append("⚠️ No matching PO found")
+        elif flag == "amount_mismatch":
+            lines.append("⚠️ Amount does not match PO")
+    if not flags:
+        lines.append("✅ All checks passed")
+
+    lines.append("")
+    lines.append(f"⚡ Confidence: {confidence}%")
+    status_icon = "✅" if status == "auto_approved" else "❗"
+    status_text = "Auto Approved" if status == "auto_approved" else "Needs Review"
+    lines.append(f"{status_icon} Status: *{status_text}*")
+
+    return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────────────
+# WhatsApp Dispatcher
+# ──────────────────────────────────────────────────────────────
 
 async def send_whatsapp_notification(phone_number: str, message: str) -> None:
-    # Fall back to the configured default number if phone_number is empty
-    target = phone_number or settings.WHATSAPP_DEFAULT_NUMBER
-    if not target:
-        logger.warning("No phone number found and WHATSAPP_DEFAULT_NUMBER not set — skipping WhatsApp notification.")
+    if not phone_number:
+        logger.warning("No phone number — skipping WhatsApp notification.")
         return
-        
-    logger.info(f"📤 Sending WhatsApp notification to {target}...")
+    logger.info(f"📤 Sending WhatsApp to {phone_number}...")
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
                 settings.WHATSAPP_API_URL,
-                json={"number": target, "message": message},
-                timeout=10.0
+                json={"number": phone_number, "message": message},
+                timeout=12.0,
             )
             res.raise_for_status()
-            logger.info("📤 WhatsApp notification sent successfully.")
+            logger.info("📤 WhatsApp sent successfully.")
     except Exception as e:
-        logger.error(f"Failed to send WhatsApp message: {e}")
-
-async def trigger_local_automation(vendor: str, amount: float, gst: float, invoice_id: str, po_number: str) -> None:
-    """Fires the webhook to the local Playwright automation agent."""
-    import os
-    
-    automation_url = os.getenv("LOCAL_AUTOMATION_URL")
-    if not automation_url:
-        logger.error("❌ LOCAL_AUTOMATION_URL is not set in environment. Cannot trigger local automation.")
-        return
-
-    logger.info("🚀 Triggering automation...")
-    logger.info("📡 Calling ngrok URL...")
-    
-    payload = {
-        "vendor": vendor,
-        "amount": amount,
-        "gst": gst,
-        "invoice_id": invoice_id,
-        "po_number": po_number or "N/A"
-    }
-
-    try:
-         async with httpx.AsyncClient() as client:
-             res = await client.post(automation_url, json=payload, timeout=5.0)
-             res.raise_for_status()
-             logger.info("✅ Successfully triggered local automation via ngrok.")
-    except Exception as e:
-         logger.error(f"❌ Failed to trigger local automation: {e}")
+        logger.error(f"WhatsApp dispatch failed: {e}")
 
 
+# ──────────────────────────────────────────────────────────────
+# Core Analysis Pipeline
+# ──────────────────────────────────────────────────────────────
 
 async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
     """
-    Core brain of AutoTwin AI.
-    Validates rules, computes confidence score, decides, saves, and notifies.
+    Main pipeline: validates invoice, scores confidence, decides, saves, notifies.
+    document_id = extracted_documents.id (UUID primary key)
     """
     logger.info(f"📥 Received document: {document_id}")
-    
-    # 6. Idempotency Check
-    already_processed = await analysis_check_idempotency(document_id)
-    if already_processed:
-        logger.info(f"Document {document_id} already processed.")
-        return {"status": "already processed", "document_id": document_id}
 
-    # 1. Fetch Data
+    # Step 1: Idempotency — skip if already processed
+    if await analysis_check_idempotency(document_id):
+        logger.info(f"Document {document_id} already processed — skipping.")
+        return {"status": "already_processed", "document_id": document_id}
+
+    # Step 2: Fetch the extracted document
     doc = await analysis_get_extracted_document(document_id)
     if not doc:
-        raise ValueError(f"Extracted document {document_id} not found.")
+        raise ValueError(f"extracted_documents row not found for id={document_id}")
 
-    user_id = doc.get("user_id", "demo_user")
-    po_number = doc.get("po_number")
-    vendor = doc.get("vendor", "Unknown")
-    amount = float(doc.get("amount", 0.0))
-    gst = float(doc.get("gst", 0.0))
-    invoice_id = doc.get("invoice_id", "")
+    user_id      = doc.get("user_id", "demo_user")
+    po_number    = doc.get("po_number")
+    vendor       = doc.get("vendor", "Unknown")
+    amount       = float(doc.get("amount", 0.0))
+    gst          = float(doc.get("gst") or doc.get("gst_rate") or 0.0)
+    invoice_id   = doc.get("invoice_id", "")
 
-    # 2. Fetch Related Data
-    po_record = await analysis_get_purchase_order(po_number) if po_number else None
+    # Step 3: Fetch related data
+    po_record      = await analysis_get_purchase_order(po_number) if po_number else None
     vendor_invoices = await analysis_get_vendor_invoices(vendor, user_id)
-    user_phone = await analysis_get_user_phone(user_id)
+    user_phone     = await analysis_get_user_phone(user_id)
 
-    logger.info("🧠 Running analysis...")
+    logger.info("🧠 Running validation engine...")
 
-    # 3. Validation Engine & 4. Confidence Engine
     score = 0
-    flags = []
+    flags: List[str] = []
 
-    # 3.1 PO Matching & 3.2 3-Way Matching
+    # 3.1 PO Matching (+30)
+    # 3.2 3-Way Matching (+25)
     if po_record:
-        # Assuming PO exists -> +30
         score += 30
-        
-        # Vendor + amount matching
         po_amount = float(po_record.get("amount", 0))
         if po_amount == amount:
             score += 25
@@ -185,54 +236,84 @@ async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
     else:
         flags.append("no_po")
 
-    # 3.3 Historical Analysis
-    avg_past_amount = 0.0
+    # 3.3 Historical Analysis (+20)
+    avg_past = 0.0
     if vendor_invoices:
-        total_hist = sum(float(inv.get("amount", 0.0)) for inv in vendor_invoices)
-        avg_past_amount = total_hist / len(vendor_invoices)
-        
-        if amount > 1.5 * avg_past_amount:
+        avg_past = sum(float(inv.get("amount", 0.0)) for inv in vendor_invoices) / len(vendor_invoices)
+        if amount > 1.5 * avg_past:
             flags.append("price_spike")
         else:
             score += 20
     else:
-        # No history, let's say neutral or we give partial score rule says "Else -> +20"
-        score += 20
+        score += 20  # No history → neutral
 
-    # 3.4 GST Validation
+    # 3.4 GST Validation (+15)
     if 0 <= gst <= 28:
         score += 15
     else:
         flags.append("gst_invalid")
 
-    # 3.5 Duplicate Detection
-    is_dupe = await analysis_check_duplicate_invoice(invoice_id, vendor, amount)
-    if is_dupe:
+    # 3.5 Duplicate Detection (+10)
+    if await analysis_check_duplicate_invoice(invoice_id, vendor, amount):
         flags.append("duplicate")
     else:
         score += 10
 
-    # 5. Decision Engine
-    logger.info(f"📊 Confidence score: {score}")
+    logger.info(f"📊 Confidence score: {score} | Flags: {flags}")
+
+    # Step 5: Decision
     status = "auto_approved" if score >= 80 else "needs_review"
 
-    # 7. Save Results (this also does Step 8: Update document status)
-    result_data = {
+    # Step 6: Save results + update doc status
+    result = {
         "document_id": document_id,
         "user_id": user_id,
         "confidence_score": score,
         "status": status,
-        "flags": flags
+        "flags": flags,
     }
-    await analysis_save_results(result_data)
+    await analysis_save_results(result)
 
-    # 9. Send WhatsApp Message
-    wa_message = await generate_whatsapp_message(flags, amount, avg_past_amount, score, status)
+    # Step 7: WhatsApp notification
+    wa_msg = await generate_whatsapp_message(
+        flags=flags,
+        amount=amount,
+        avg=avg_past,
+        confidence=score,
+        status=status,
+        doc=doc,
+    )
+
+    # If needs_review → append approval prompt
+    if status == "needs_review":
+        wa_msg += (
+            f"\n\n🔔 *Action Required*\n"
+            f"Reply with:\n"
+            f"✅ *APPROVE {document_id}*\n"
+            f"❌ *REJECT {document_id}*"
+        )
+
     if user_phone:
-        await send_whatsapp_notification(user_phone, wa_message)
+        await send_whatsapp_notification(user_phone, wa_msg)
 
-    # 10. Trigger Local ERP Automation if auto approved
-    if status == "auto_approved":
-        await trigger_local_automation(vendor, amount, gst, invoice_id, po_number)
+    return result
 
-    return result_data
+
+async def process_invoice_analysis_by_invoice_id(invoice_id: str) -> Dict[str, Any]:
+    """
+    Alternate entry point called by the orchestrator's finalizer_node.
+    Looks up the extracted_document by its invoice_id column (orchestrator UUID),
+    then delegates to process_invoice_analysis with the document's own primary key.
+    """
+    logger.info(f"📥 Auto-triggered analysis for invoice_id={invoice_id}")
+    doc = await analysis_get_document_by_invoice_id(invoice_id)
+    if not doc:
+        logger.warning(f"No extracted_document found for invoice_id={invoice_id} — skipping analysis.")
+        return {"status": "not_found", "invoice_id": invoice_id}
+
+    document_id = doc.get("document_id") or str(doc.get("id", ""))
+    if not document_id:
+        logger.warning("Could not resolve document primary key — skipping analysis.")
+        return {"status": "no_document_id", "invoice_id": invoice_id}
+
+    return await process_invoice_analysis(document_id)
