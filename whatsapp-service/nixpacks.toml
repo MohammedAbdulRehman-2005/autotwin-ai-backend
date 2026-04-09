@@ -1,6 +1,0 @@
-providers = ["node"]
-
-[phases.setup]
-aptPkgs = [
-  "chromium"
-]
