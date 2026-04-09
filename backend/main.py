@@ -214,6 +214,31 @@ app.add_middleware(
 app.include_router(router, prefix="/api")
 
 # ══════════════════════════════════════════════════════════════
+# Root-level aliases — frontend calls these WITHOUT /api prefix
+# ══════════════════════════════════════════════════════════════
+
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+@app.post("/process-invoice-analysis", include_in_schema=False)
+async def root_process_invoice_analysis(_req: _Request) -> _JSONResponse:
+    """Alias: frontend calls /process-invoice-analysis (no /api prefix)."""
+    try:
+        body = await _req.json()
+        from services.analysis_engine import process_invoice_analysis
+        result = await process_invoice_analysis(body.get("document_id", ""))
+        return _JSONResponse(content=result)
+    except Exception as exc:
+        logger.error("[RootAlias] /process-invoice-analysis error: %s", exc)
+        return _JSONResponse(status_code=500, content={"error": str(exc)})
+
+@app.post("/process-invoice", include_in_schema=False)
+async def root_process_invoice(_req: _Request) -> _JSONResponse:
+    """Alias: forward /process-invoice (no /api prefix) → /api/process-invoice."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/api/process-invoice", status_code=307)
+
+# ══════════════════════════════════════════════════════════════
 # Root
 # ══════════════════════════════════════════════════════════════
 
