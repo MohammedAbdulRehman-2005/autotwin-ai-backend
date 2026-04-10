@@ -357,27 +357,50 @@ async function connectToWhatsApp() {
       };
 
       // ── 1. APPROVAL HANDLER ─────────────────────────────────
-      const approveMatch = upper.match(/^(APPROVE|REJECT)\s+([\w-]+)$/);
+      const approveMatch = upper.match(/^(APPROVE|REJECT)(?:\s+([\w-]+))?$/);
       if (approveMatch) {
         const action   = approveMatch[1];
-        const docId    = approveMatch[2];
+        let docId      = approveMatch[2];
         const approved = action === 'APPROVE';
-        console.log(`\ud83d\udcdd Approval reply: ${action} for document_id=${docId}`);
+
+        if (!docId || docId === 'ALL' || docId === 'LATEST') {
+          await reply('🔍 Looking up the latest pending invoice...');
+          const { data: pendingDocs } = await supabase
+            .from('extracted_documents')
+            .select('id')
+            .eq('decision', 'human_review')
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (!pendingDocs || pendingDocs.length === 0) {
+            await reply('⚠️ No pending invoices found requiring review.');
+            return;
+          }
+          docId = pendingDocs[0].id;
+        }
+
+        console.log(`📝 Approval reply: ${action} for document_id=${docId}`);
         try {
-          const resp = await axios.post(`${FASTAPI_URL}/api/approve`, {
+          let apiHost = FASTAPI_URL;
+          if (!apiHost.startsWith('http')) {
+            apiHost = 'https://' + apiHost;
+          }
+
+          const resp = await axios.post(`${apiHost}/api/approve`, {
             invoice_id: docId,
             approved: approved,
             reviewer_notes: `WhatsApp ${action.toLowerCase()} by ${sender.split('@')[0]}`
           });
           const d = resp.data;
           const confirmMsg = approved
-            ? `\u2705 Invoice *${docId}* has been *Approved*\n\ud83d\udcca New confidence: ${(d.updated_confidence * 100).toFixed(0)}%\n${d.message}`
-            : `\u274c Invoice *${docId}* has been *Rejected*\n\ud83d\udccc Flagged for re-processing.\n${d.message}`;
+            ? `✅ Invoice *${docId}* has been *Approved*\n📊 New confidence: ${(d.updated_confidence * 100).toFixed(0)}%\n${d.message || ''}`
+            : `❌ Invoice *${docId}* has been *Rejected*\n📌 Flagged for re-processing.\n${d.message || ''}`;
           await reply(confirmMsg);
           return;
         } catch (err) {
-          console.error('\u274c FastAPI approval callback failed:', err.message);
-          await reply(`\u26a0\ufe0f Could not process your ${action} request. Please use the dashboard.`);
+          console.error('❌ FastAPI approval callback failed:', err.message);
+          let errMsg = err.response?.data?.detail || err.message;
+          await reply(`⚠️ Could not process your ${action} request.\nError: ${errMsg}`);
           return;
         }
       }
