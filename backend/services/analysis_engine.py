@@ -293,8 +293,13 @@ async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
             f"❌ *REJECT {document_id}*"
         )
 
-    if user_phone:
-        await send_whatsapp_notification(user_phone, wa_msg)
+    # Use DB phone or fallback to environment default
+    final_phone = user_phone or getattr(settings, "WHATSAPP_DEFAULT_NUMBER", "")
+
+    if final_phone:
+        await send_whatsapp_notification(final_phone, wa_msg)
+    else:
+        logger.warning(f"⚠️ No phone number resolved for user {user_id}. WhatsApp notification skipped.")
 
     return result
 
