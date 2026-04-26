@@ -169,19 +169,13 @@ def _fallback_message(
 # ──────────────────────────────────────────────────────────────
 
 async def send_whatsapp_notification(phone_number: str, message: str) -> None:
+    from services.whatsapp_client import send_whatsapp_message
     if not phone_number:
         logger.warning("No phone number — skipping WhatsApp notification.")
         return
-    logger.info(f"📤 Sending WhatsApp to {phone_number}...")
+    logger.info(f"📤 Preparing to send WhatsApp to {phone_number}...")
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.post(
-                settings.WHATSAPP_API_URL,
-                json={"number": phone_number, "message": message},
-                timeout=12.0,
-            )
-            res.raise_for_status()
-            logger.info("📤 WhatsApp sent successfully.")
+        await send_whatsapp_message(phone_number, message)
     except Exception as e:
         logger.error(f"WhatsApp dispatch failed: {e}")
 

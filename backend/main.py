@@ -213,6 +213,9 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 
+from api.whatsapp_routes import router as whatsapp_router
+app.include_router(whatsapp_router, prefix="/api")
+
 # ══════════════════════════════════════════════════════════════
 # Root-level aliases — frontend calls these WITHOUT /api prefix
 # ══════════════════════════════════════════════════════════════
