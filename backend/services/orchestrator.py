@@ -57,7 +57,8 @@ class AgentState(TypedDict, total=False):
     terminate: bool
     memory_update: dict
     trace: list
-    
+    category: str
+
     # Internal context bindings
     logger: Any
     confidence_breakdown: dict
@@ -357,10 +358,23 @@ class Orchestrator:
             anomaly=intelligence_payload["anomaly"].get("is_anomaly", False) if isinstance(intelligence_payload["anomaly"], dict) else False
         )
         
+        # Classify invoice category
+        category = "Other"
+        try:
+            from services.category_classifier import classify_invoice_category
+            raw_input = state.get("raw_input", {})
+            category = await classify_invoice_category(
+                vendor=vendor,
+                amount=intelligence_payload["amount"],
+                message_hint=raw_input.get("user_message") or raw_input.get("caption"),
+            )
+        except Exception as exc:
+            logger.warning("[Orchestrator] Category classification skipped: %s", exc)
+
         try:
             from models.database import save_invoice, update_vendor_history
             user_id = state.get("raw_input", {}).get("user_id", "demo_user")
-            
+
             doc = {
                 "invoice_id": state.get("invoice_id", ""),
                 "vendor": vendor,
@@ -372,6 +386,7 @@ class Orchestrator:
                 "risk_score": 1.0 - state.get("confidence_score", 0.0),
                 "decision": state.get("decision", ""),
                 "status": state.get("decision", ""),
+                "category": category,
             }
             await save_invoice(doc, user_id=user_id)
             await update_vendor_history(vendor, doc, user_id=user_id)
@@ -379,7 +394,7 @@ class Orchestrator:
             logger.warning("[Orchestrator] DB save skipped: %s", exc)
 
         trace.append({"node": "persistence_node", "status": "success", "details": "Saved to memory and DB"})
-        return {"trace": trace}
+        return {"trace": trace, "category": category}
 
     async def finalizer_node(self, state: AgentState) -> dict:
         trace = list(state.get("trace", []))
@@ -472,4 +487,5 @@ class Orchestrator:
             retry_count=final_state.get("retry_count", 0),
             processing_time_ms=elapsed_ms,
             risk_score=1.0 - final_state.get("confidence_score", 0.0),
+            category=final_state.get("category", "Other"),
         )

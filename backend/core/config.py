@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     # WhatsApp Integration (Official Meta Cloud API)
     WHATSAPP_CLOUD_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
+
+    @property
+    def whatsapp_token(self) -> str:
+        return self.WHATSAPP_CLOUD_TOKEN.strip()
+
+    @property
+    def whatsapp_phone_id(self) -> str:
+        return self.WHATSAPP_PHONE_NUMBER_ID.strip()
     WHATSAPP_VERIFY_TOKEN: str = "autotwin_secret_webhook_token"
     WHATSAPP_DEFAULT_NUMBER: str = "917036970010"  # Fallback when DB phone lookup fails
 

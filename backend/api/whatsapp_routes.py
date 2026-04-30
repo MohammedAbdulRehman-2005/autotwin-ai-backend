@@ -1,22 +1,32 @@
 """
 api/whatsapp_routes.py
 ───────────────────────
-Handles incoming Webhooks from Meta's Official WhatsApp Cloud API.
+Webhook handler for Meta's WhatsApp Cloud API.
+
+Handles:
+- Text messages        → intent routing / AI chat
+- Interactive replies  → list_reply (menu) and button_reply (approve/reject)
+- Image / document     → invoice intake pipeline
 """
+
+import asyncio
 import logging
 import re
-from fastapi import APIRouter, Request, Query, HTTPException, Response
-from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from core.config import settings
-from services.whatsapp_bot import handle_incoming_message
-from models.database import get_invoice
-from services.whatsapp_client import send_whatsapp_message
-import httpx  # For calling our own local /api/approve endpoint without duplicating logic
+from services.whatsapp_bot import handle_incoming_message, handle_whatsapp_invoice
+from services.whatsapp_client import send_whatsapp_message, send_interactive_buttons
 
 logger = logging.getLogger("autotwin_ai.whatsapp_routes")
 router = APIRouter()
+
+
+# ──────────────────────────────────────────────────────────────
+# Webhook Verification
+# ──────────────────────────────────────────────────────────────
 
 @router.get("/webhook/whatsapp")
 async def verify_webhook(
@@ -24,100 +34,194 @@ async def verify_webhook(
     hub_challenge: str = Query(None, alias="hub.challenge"),
     hub_verify_token: str = Query(None, alias="hub.verify_token"),
 ):
-    """
-    Webhook verification required by Meta.
-    """
     if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
         logger.info("WhatsApp webhook verified successfully.")
         return int(hub_challenge)
-    
     logger.warning("WhatsApp webhook verification failed.")
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
+# ──────────────────────────────────────────────────────────────
+# Incoming Webhook
+# ──────────────────────────────────────────────────────────────
+
 @router.post("/webhook/whatsapp")
 async def receive_webhook(request: Request):
     """
-    Receives incoming WhatsApp messages from users.
+    Receives incoming messages from WhatsApp Cloud API.
+    Responds with 200 immediately; all processing is fire-and-forget.
     """
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Meta sends an array of entries
     entries = body.get("entry", [])
     for entry in entries:
-        changes = entry.get("changes", [])
-        for change in changes:
+        for change in entry.get("changes", []):
             value = change.get("value", {})
-            messages = value.get("messages", [])
-            for msg in messages:
-                if msg.get("type") == "text":
-                    sender_phone = msg.get("from")
-                    text_body = msg.get("text", {}).get("body", "").strip()
-                    
-                    if not sender_phone or not text_body:
-                        continue
-                        
-                    logger.info(f"Incoming WhatsApp message from {sender_phone}: {text_body}")
-                    
-                    # 1. Check if it's an APPROVE/REJECT command
-                    upper_text = text_body.upper()
-                    match = re.match(r"^(APPROVE|REJECT)(?:\s+([\w-]+))?$", upper_text)
-                    if match:
-                        action = match.group(1)
-                        doc_id = match.group(2)
-                        await handle_approval_action(sender_phone, action, doc_id, request.url.components.netloc)
-                    else:
-                        # 2. General AI Chat / Intent routing
-                        import asyncio
-                        # Fire and forget to not block webhook response (Meta requires 200 OK fast)
-                        asyncio.create_task(handle_incoming_message(sender_phone, text_body))
+            for msg in value.get("messages", []):
+                asyncio.create_task(_dispatch_message(msg))
 
     return Response(content="EVENT_RECEIVED", status_code=200)
 
-async def handle_approval_action(sender_phone: str, action: str, doc_id: str, host: str):
+
+# ──────────────────────────────────────────────────────────────
+# Message Dispatcher
+# ──────────────────────────────────────────────────────────────
+
+async def _dispatch_message(msg: dict) -> None:
+    """Route a single WhatsApp message to the correct handler."""
+    sender = msg.get("from")
+    if not sender:
+        return
+
+    msg_type = msg.get("type")
+
+    # ── Interactive reply (list or button) ──────────────────
+    if msg_type == "interactive":
+        interactive = msg.get("interactive", {})
+        itype = interactive.get("type")
+
+        if itype == "list_reply":
+            # User selected a menu option
+            row_id = interactive.get("list_reply", {}).get("id", "")
+            logger.info(f"List reply from {sender}: {row_id}")
+            asyncio.create_task(handle_incoming_message(sender, row_id))
+
+        elif itype == "button_reply":
+            # User tapped Approve / Reject button
+            btn_id = interactive.get("button_reply", {}).get("id", "")
+            logger.info(f"Button reply from {sender}: {btn_id}")
+            asyncio.create_task(_handle_button_reply(sender, btn_id))
+
+        return
+
+    # ── Text message ─────────────────────────────────────────
+    if msg_type == "text":
+        text_body = msg.get("text", {}).get("body", "").strip()
+        if not text_body:
+            return
+
+        logger.info(f"Text message from {sender}: {text_body}")
+
+        upper = text_body.upper()
+        # Legacy text-based APPROVE/REJECT still supported
+        match = re.match(r"^(APPROVE|REJECT)(?:\s+([\w-]+))?$", upper)
+        if match:
+            action = match.group(1)
+            doc_id = match.group(2)
+            asyncio.create_task(_handle_approval(sender, action == "APPROVE", doc_id))
+        else:
+            asyncio.create_task(handle_incoming_message(sender, text_body))
+        return
+
+    # ── Image ────────────────────────────────────────────────
+    if msg_type == "image":
+        image = msg.get("image", {})
+        media_id = image.get("id")
+        mime_type = image.get("mime_type", "image/jpeg")
+        caption = image.get("caption", "")
+        if media_id:
+            logger.info(f"Image from {sender}: media_id={media_id}, caption={caption!r}")
+            asyncio.create_task(
+                handle_whatsapp_invoice(sender, media_id, mime_type, caption or None)
+            )
+        return
+
+    # ── Document (PDF) ───────────────────────────────────────
+    if msg_type == "document":
+        document = msg.get("document", {})
+        media_id = document.get("id")
+        mime_type = document.get("mime_type", "application/pdf")
+        caption = document.get("caption", "")
+        filename = document.get("filename", "")
+        if media_id:
+            logger.info(f"Document from {sender}: {filename} media_id={media_id}")
+            asyncio.create_task(
+                handle_whatsapp_invoice(sender, media_id, mime_type, caption or None)
+            )
+        return
+
+    logger.debug(f"Unhandled message type '{msg_type}' from {sender}")
+
+
+# ──────────────────────────────────────────────────────────────
+# Button Reply: Approve / Reject
+# ──────────────────────────────────────────────────────────────
+
+async def _handle_button_reply(sender: str, btn_id: str) -> None:
+    """
+    Handle button_reply from an approval request.
+    Expected btn_id format: "approve:<doc_id>" or "reject:<doc_id>"
+    """
+    if ":" not in btn_id:
+        await send_whatsapp_message(sender, "Unrecognised button. Please use the menu.")
+        return
+
+    action_raw, doc_id = btn_id.split(":", 1)
+    approved = action_raw.lower() == "approve"
+    await _handle_approval(sender, approved, doc_id)
+
+
+async def _handle_approval(sender: str, approved: bool, doc_id: Optional[str]) -> None:
+    """Core approval/rejection logic."""
     from models.supabase_client import get_supabase_client
-    approved = (action == "APPROVE")
-    
-    if not doc_id or doc_id in ["ALL", "LATEST"]:
-        # Find latest pending document
-        await send_whatsapp_message(sender_phone, "🔍 Looking up the latest pending invoice...")
+    from api.routes import approve_invoice
+    from models.schemas import ApprovalRequest
+
+    action_label = "Approve" if approved else "Reject"
+
+    if not doc_id or doc_id.upper() in {"ALL", "LATEST"}:
+        await send_whatsapp_message(sender, "Looking up the latest pending invoice…")
         supabase = get_supabase_client()
-        res = supabase.table("extracted_documents").select("id").eq("decision", "human_review").order("created_at", desc=True).limit(1).execute()
-        
+        res = (
+            supabase.table("extracted_documents")
+            .select("id")
+            .eq("decision", "human_review")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
         pending = res.data or []
         if not pending:
-            await send_whatsapp_message(sender_phone, "⚠️ No pending invoices found requiring review.")
+            await send_whatsapp_message(sender, "No pending invoices found requiring review.")
             return
         doc_id = pending[0].get("id")
 
-    logger.info(f"📝 Approval reply: {action} for document_id={doc_id}")
+    logger.info(f"Approval action: {action_label} for doc_id={doc_id} by {sender}")
+
     try:
-        # Call the existing /approve route via HTTP to ensure all logic (memory graph, local automation) fires.
-        # Alternatively, we could import approve_invoice from routes, but this ensures a clean context.
-        # For simplicity and reliability in a webhook, we'll make a self-HTTP call if we know our own URL,
-        # or we can just import the route handler. 
-        from api.routes import approve_invoice
-        from models.schemas import ApprovalRequest
-        
         req = ApprovalRequest(
             invoice_id=doc_id,
             approved=approved,
-            reviewer_notes=f"WhatsApp {action.lower()} by {sender_phone}"
+            reviewer_notes=f"WhatsApp {action_label.lower()} by {sender}",
         )
-        
-        # We pass None for _user to trigger demo_user fallback which is fine for webhook
         result = await approve_invoice(req, _user=None)
-        
+
         if approved:
-            msg = f"✅ Invoice *{doc_id}* has been *Approved*\n📊 New confidence: {result.updated_confidence * 100:.0f}%\n{result.message}"
+            body = (
+                f"Invoice approved successfully.\n\n"
+                f"Updated Confidence: {result.updated_confidence * 100:.0f}%\n"
+                f"{result.message}"
+            )
         else:
-            msg = f"❌ Invoice *{doc_id}* has been *Rejected*\n📌 Flagged for re-processing.\n{result.message}"
-            
-        await send_whatsapp_message(sender_phone, msg)
-        
+            body = (
+                f"Invoice rejected and flagged for re-processing.\n\n"
+                f"{result.message}"
+            )
+
+        await send_interactive_buttons(
+            to_phone=sender,
+            header="AutoTwin AI",
+            body=body,
+            footer=f"Invoice ID: {doc_id[:8]}…",
+            buttons=[{"id": "menu", "title": "Back to Menu"}],
+        )
+
     except Exception as err:
-        logger.error(f"Approval action failed: {err}")
-        await send_whatsapp_message(sender_phone, f"⚠️ Could not process your {action} request.\nError: {str(err)}")
+        logger.error(f"Approval failed: {err}")
+        await send_whatsapp_message(
+            sender,
+            f"Could not process your {action_label} request. Error: {str(err)}",
+        )

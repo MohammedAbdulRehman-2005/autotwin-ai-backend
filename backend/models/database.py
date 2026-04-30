@@ -531,10 +531,15 @@ async def analysis_get_user_phone(user_id: str) -> Optional[str]:
             import uuid
             uuid.UUID(user_id)
             rows = await _execute(
-                "SELECT phone FROM users WHERE id = :uid LIMIT 1",
+                "SELECT whatsapp_number FROM users WHERE id = :uid LIMIT 1",
                 {"uid": user_id}
             )
-            return rows[0]["phone"] if rows and "phone" in rows[0] else None
+            if rows:
+                # Normalise — strip non-digits so the API gets a clean E.164 number
+                raw = rows[0].get("whatsapp_number") or ""
+                digits = "".join(filter(str.isdigit, raw))
+                return digits if digits else None
+            return None
         except ValueError:
             return None
     return None

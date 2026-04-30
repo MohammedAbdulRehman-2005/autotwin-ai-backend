@@ -278,20 +278,33 @@ async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
         doc=doc,
     )
 
-    # If needs_review → append approval prompt
-    if status == "needs_review":
-        wa_msg += (
-            f"\n\n🔔 *Action Required*\n"
-            f"Reply with:\n"
-            f"✅ *APPROVE {document_id}*\n"
-            f"❌ *REJECT {document_id}*"
-        )
-
-    # Use DB phone or fallback to environment default
     final_phone = user_phone or getattr(settings, "WHATSAPP_DEFAULT_NUMBER", "")
 
     if final_phone:
         await send_whatsapp_notification(final_phone, wa_msg)
+
+        # For review-required invoices, follow up with interactive Approve/Reject buttons
+        if status == "needs_review":
+            try:
+                from services.whatsapp_client import send_interactive_buttons
+                vendor_name = doc.get("vendor", "Unknown Vendor")
+                await send_interactive_buttons(
+                    to_phone=final_phone,
+                    header="Action Required",
+                    body=(
+                        f"Vendor: {vendor_name}\n"
+                        f"Amount: ₹{amount:,.2f}\n"
+                        f"Confidence: {score}%\n\n"
+                        "Please review this invoice and take action."
+                    ),
+                    footer=f"Invoice ID: {document_id[:8]}…",
+                    buttons=[
+                        {"id": f"approve:{document_id}", "title": "Approve"},
+                        {"id": f"reject:{document_id}", "title": "Reject"},
+                    ],
+                )
+            except Exception as btn_exc:
+                logger.warning(f"Could not send approval buttons (non-fatal): {btn_exc}")
     else:
         logger.warning(f"⚠️ No phone number resolved for user {user_id}. WhatsApp notification skipped.")
 
