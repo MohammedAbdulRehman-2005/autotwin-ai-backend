@@ -556,14 +556,14 @@ async def get_user_id_by_phone(phone: str) -> Optional[str]:
     try:
         rows = await _execute(
             """
-            SELECT id FROM users
+            SELECT firebase_uid FROM users
             WHERE REGEXP_REPLACE(whatsapp_number, '[^0-9]', '', 'g') LIKE :suffix
             LIMIT 1
             """,
             {"suffix": f"%{suffix}"},
         )
         if rows:
-            return str(rows[0]["id"])
+            return str(rows[0]["firebase_uid"])
         return None
     except Exception as exc:
         logger.warning("get_user_id_by_phone error: %s", exc)

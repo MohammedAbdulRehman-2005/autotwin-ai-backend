@@ -139,3 +139,78 @@ Strict Rules:
         normalized["vendor"], normalized["amount"], normalized["gst_rate"],
     )
     return normalized
+
+
+def _extract_pdf_text(file_bytes: bytes) -> str:
+    """Extract plain text from PDF bytes using pypdf. Returns empty string on failure."""
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(file_bytes))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n".join(pages).strip()
+    except Exception as exc:
+        logger.warning("PDF text extraction failed: %s", exc)
+        return ""
+
+
+async def extract_with_groq_fallback(file_bytes: bytes) -> dict:
+    """
+    Fallback extractor used when Gemini is unavailable.
+    Extracts text from the PDF then sends it to Groq for structured parsing.
+    """
+    groq_key = os.getenv("GROQ_API_KEY")
+    if not groq_key:
+        raise ValueError("GROQ_API_KEY not set — cannot run Groq fallback")
+
+    text = await asyncio.to_thread(_extract_pdf_text, file_bytes)
+    if not text:
+        raise ValueError("PDF text extraction yielded no content")
+
+    prompt = f"""You are an invoice data extraction AI. Extract structured data from the invoice text below.
+
+Return ONLY valid JSON with these fields:
+{{
+  "vendor": "supplier company name",
+  "company": "buyer company name or null",
+  "invoice_no": "invoice number or null",
+  "date": "invoice date in YYYY-MM-DD format",
+  "due_date": "payment due date in YYYY-MM-DD or null",
+  "payment_terms": "e.g. Net 30 or null",
+  "subtotal": numeric amount before tax or null,
+  "gst_rate": GST percentage as number (e.g. 18) or null,
+  "gst_amount": numeric GST amount or null,
+  "total": total invoice amount including taxes,
+  "currency": "INR",
+  "seller_gstin": "15-char GSTIN or null",
+  "buyer_gstin": "15-char GSTIN or null",
+  "line_items": [{{"description": "item", "quantity": number, "unit_price": number, "amount": number}}] or null,
+  "notes": "any important notes or null"
+}}
+
+Rules: All numeric values must be numbers not strings. Missing fields must be null. Return ONLY the JSON object.
+
+Invoice text:
+{text[:4000]}"""
+
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+            },
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+
+    data = extract_json(content)
+    normalized = normalize_rich(data)
+    logger.info(
+        "Groq fallback extraction: vendor=%s total=%.2f",
+        normalized["vendor"], normalized["amount"],
+    )
+    return normalized

@@ -297,10 +297,10 @@ async def process_invoice_analysis(document_id: str) -> Dict[str, Any]:
                         f"Confidence: {score}%\n\n"
                         "Please review this invoice and take action."
                     ),
-                    footer=f"Invoice ID: {document_id[:8]}…",
+                    footer=f"Invoice ID: {(invoice_id or document_id)[:8]}…",
                     buttons=[
-                        {"id": f"approve:{document_id}", "title": "Approve"},
-                        {"id": f"reject:{document_id}", "title": "Reject"},
+                        {"id": f"approve:{invoice_id or document_id}", "title": "Approve"},
+                        {"id": f"reject:{invoice_id or document_id}", "title": "Reject"},
                     ],
                 )
             except Exception as btn_exc:

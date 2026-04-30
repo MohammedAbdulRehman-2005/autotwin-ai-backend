@@ -123,6 +123,7 @@ async def process_invoice(
     amount: Optional[float] = Form(default=None),
     date: Optional[str] = Form(default=None),
     currency: Optional[str] = Form(default="INR"),
+    user_id: Optional[str] = Form(default=None),
     _user: Optional[Dict[str, Any]] = Depends(_optional_auth),
 ) -> ProcessInvoiceResponse:
     """
@@ -139,7 +140,7 @@ async def process_invoice(
 
     content_type = request.headers.get("content-type", "")
 
-    user_id = _user.get("username", "demo_user") if _user else "demo_user"
+    user_id = user_id or (_user.get("username") if _user else None) or "demo_user"
     file_url: Optional[str] = None
 
     if file is not None:

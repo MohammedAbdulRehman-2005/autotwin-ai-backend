@@ -423,7 +423,7 @@ async def handle_whatsapp_invoice(
 
         # Auto-link: if user has no WhatsApp number saved, persist sender_phone now
         # so analysis_engine can find them for future notifications
-        if real_user_id != sender_phone:  # we resolved a real UUID
+        if real_user_id != sender_phone:  # we resolved a real Firebase UID
             from models.database import analysis_get_user_phone
             existing_phone = await analysis_get_user_phone(real_user_id)
             if not existing_phone:
@@ -431,7 +431,7 @@ async def handle_whatsapp_invoice(
                     supabase_auto = get_supabase_client()
                     supabase_auto.table("users").update(
                         {"whatsapp_number": f"+{sender_phone.lstrip('+')}"}
-                    ).eq("id", real_user_id).execute()
+                    ).eq("firebase_uid", real_user_id).execute()
                     logger.info("Auto-linked WhatsApp number %s to user %s", sender_phone, real_user_id)
                 except Exception as _e:
                     logger.warning("Auto-link phone failed: %s", _e)

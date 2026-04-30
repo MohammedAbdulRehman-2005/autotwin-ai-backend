@@ -31,7 +31,7 @@ from services.confidence import ConfidenceEngine
 from services.decision import DecisionEngine
 from services.logger import PipelineLogger
 from services.memory import MemoryGraph
-from services.gemini_client import extract_with_gemini
+from services.gemini_client import extract_with_gemini, extract_with_groq_fallback
 
 logger = logging.getLogger("autotwin_ai.orchestrator")
 
@@ -178,10 +178,16 @@ class Orchestrator:
             if file_bytes:
                 pipeline_logger.log("extraction", "Invoking Gemini Vision model...", "info")
                 try:
-                    # extract_with_gemini returns a JSON dict (vendor, amount, date, currency)
                     gemini_extracted = await extract_with_gemini(file_bytes)
-                except Exception as eval_exc:
-                    logger.error(f"[Orchestrator] Gemini Vision failed: {eval_exc}")
+                except Exception as gemini_exc:
+                    logger.error(f"[Orchestrator] Gemini Vision failed: {gemini_exc}")
+                    # Groq + pypdf text fallback
+                    try:
+                        logger.info("[Orchestrator] Trying Groq fallback extractor...")
+                        gemini_extracted = await extract_with_groq_fallback(file_bytes)
+                        logger.info("[Orchestrator] Groq fallback succeeded: vendor=%s", gemini_extracted.get("vendor"))
+                    except Exception as groq_exc:
+                        logger.warning("[Orchestrator] Groq fallback also failed: %s", groq_exc)
 
             # Fallback legacy logic adapted for structural compliance
             ext_obj = await self.vision_agent.extract(
