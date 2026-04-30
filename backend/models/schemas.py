@@ -31,12 +31,35 @@ class InvoiceSchema(BaseModel):
 # ─────────────────────────────────────────────
 # 2. ExtractionResult
 # ─────────────────────────────────────────────
+class LineItem(BaseModel):
+    description: str = ""
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    amount: Optional[float] = None
+
+
 class ExtractionResult(BaseModel):
+    # Core identifiers
     vendor: str
-    amount: float
+    company: Optional[str] = None          # Buyer/bill-to company
+    invoice_no: Optional[str] = None       # Invoice number / ID
+    amount: float                          # Total (incl. tax)
     date: str
-    extraction_confidence: float = Field(ge=0.0, le=1.0)
-    currency: str
+    due_date: Optional[str] = None
+    payment_terms: Optional[str] = None    # "Net 30", "Immediate", etc.
+    # Financial breakdown
+    subtotal: Optional[float] = None       # Pre-tax amount
+    gst_rate: Optional[float] = None       # GST percentage (e.g. 18.0)
+    gst_amount: Optional[float] = None     # GST value in currency
+    currency: str = "INR"
+    # Tax identifiers
+    seller_gstin: Optional[str] = None
+    buyer_gstin: Optional[str] = None
+    # Line items & notes
+    line_items: Optional[List[LineItem]] = None
+    notes: Optional[str] = None
+    # Confidence
+    extraction_confidence: float = Field(ge=0.0, le=1.0, default=0.5)
 
     @field_validator("extraction_confidence")
     @classmethod
@@ -138,8 +161,18 @@ class LogEntry(BaseModel):
 class ProcessInvoiceResponse(BaseModel):
     invoice_id: str
     vendor: str
+    company: Optional[str] = None
+    invoice_no: Optional[str] = None
     amount: float
     date: str
+    due_date: Optional[str] = None
+    subtotal: Optional[float] = None
+    gst_rate: Optional[float] = None
+    gst_amount: Optional[float] = None
+    seller_gstin: Optional[str] = None
+    buyer_gstin: Optional[str] = None
+    line_items: Optional[List[Any]] = None
+    notes: Optional[str] = None
     anomaly: bool
     confidence: float = Field(ge=0.0, le=1.0)
     status: str

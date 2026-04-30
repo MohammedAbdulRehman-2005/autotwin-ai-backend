@@ -168,11 +168,11 @@ async def save_invoice(data: dict, user_id: str = "demo_user") -> str:
                         }
                     )
 
-                    # 2. UPSERT extracted_documents
-                    # Format JSON fields
+                    # 2. UPSERT extracted_documents (with rich extraction fields)
                     anomaly_details = json.dumps(data.get("anomaly_details") or {})
                     confidence_breakdown = json.dumps(data.get("confidence_breakdown") or {})
                     logs_json = json.dumps(data.get("logs") or [])
+                    line_items_json = json.dumps(data.get("line_items") or [])
 
                     await session.execute(
                         text("""
@@ -180,13 +180,22 @@ async def save_invoice(data: dict, user_id: str = "demo_user") -> str:
                             user_id, invoice_id, vendor, amount, date,
                             anomaly, confidence, status, decision, explanation,
                             anomaly_details, confidence_breakdown, logs,
-                            risk_score, processing_time_ms, file_url, created_at
+                            risk_score, processing_time_ms, file_url,
+                            invoice_no, due_date, payment_terms, subtotal,
+                            gst_rate, gst_amount, line_items,
+                            seller_gstin, buyer_gstin, buyer_company, notes,
+                            created_at
                         ) VALUES (
                             :user_id, :invoice_id, :vendor, :amount, :date,
                             :anomaly, :confidence, :status, :decision, :explanation,
                             CAST(:anomaly_details AS jsonb), CAST(:confidence_breakdown AS jsonb), CAST(:logs AS jsonb),
-                            :risk_score, :processing_time_ms, :file_url, now()
+                            :risk_score, :processing_time_ms, :file_url,
+                            :invoice_no, :due_date, :payment_terms, :subtotal,
+                            :gst_rate, :gst_amount, CAST(:line_items AS jsonb),
+                            :seller_gstin, :buyer_gstin, :buyer_company, :notes,
+                            now()
                         )
+                        ON CONFLICT DO NOTHING
                         """),
                         {
                             "user_id": uid,
@@ -204,7 +213,18 @@ async def save_invoice(data: dict, user_id: str = "demo_user") -> str:
                             "logs": logs_json,
                             "risk_score": float(data.get("risk_score", 0.0)),
                             "processing_time_ms": float(data.get("processing_time_ms") or 0.0),
-                            "file_url": data.get("file_url")
+                            "file_url": data.get("file_url"),
+                            "invoice_no": data.get("invoice_no"),
+                            "due_date": data.get("due_date"),
+                            "payment_terms": data.get("payment_terms"),
+                            "subtotal": float(data["subtotal"]) if data.get("subtotal") else None,
+                            "gst_rate": float(data["gst_rate"]) if data.get("gst_rate") else None,
+                            "gst_amount": float(data["gst_amount"]) if data.get("gst_amount") else None,
+                            "line_items": line_items_json,
+                            "seller_gstin": data.get("seller_gstin"),
+                            "buyer_gstin": data.get("buyer_gstin"),
+                            "buyer_company": data.get("company"),
+                            "notes": data.get("notes"),
                         }
                     )
                 except Exception as exc:
@@ -524,6 +544,85 @@ async def analysis_get_vendor_invoices(vendor: str, user_id: str) -> List[dict]:
             {"vendor": vendor, "uid": user_id}
         )
     return []
+
+async def get_user_id_by_phone(phone: str) -> Optional[str]:
+    """Look up user UUID by WhatsApp phone number. Matches last 10 digits to handle country codes."""
+    if not _pg_available:
+        return None
+    digits = "".join(filter(str.isdigit, phone))
+    if len(digits) < 10:
+        return None
+    suffix = digits[-10:]
+    try:
+        rows = await _execute(
+            """
+            SELECT id FROM users
+            WHERE REGEXP_REPLACE(whatsapp_number, '[^0-9]', '', 'g') LIKE :suffix
+            LIMIT 1
+            """,
+            {"suffix": f"%{suffix}"},
+        )
+        if rows:
+            return str(rows[0]["id"])
+        return None
+    except Exception as exc:
+        logger.warning("get_user_id_by_phone error: %s", exc)
+        return None
+
+
+async def check_phone_unique(phone: str, exclude_user_id: Optional[str] = None) -> bool:
+    """Returns True if phone number is available (not used by another user)."""
+    if not _pg_available:
+        return True
+    digits = "".join(filter(str.isdigit, phone))
+    if len(digits) < 10:
+        return True
+    suffix = digits[-10:]
+    try:
+        sql = "SELECT id FROM users WHERE REGEXP_REPLACE(whatsapp_number, '[^0-9]', '', 'g') LIKE :suffix"
+        params: dict = {"suffix": f"%{suffix}"}
+        if exclude_user_id:
+            sql += " AND id != :uid"
+            params["uid"] = exclude_user_id
+        rows = await _execute(sql + " LIMIT 1", params)
+        return len(rows) == 0
+    except Exception as exc:
+        logger.warning("check_phone_unique error: %s", exc)
+        return True
+
+
+async def update_document_from_analysis(invoice_id: str, analysis_result: dict) -> None:
+    """Update extracted_documents with authoritative values from the analysis engine."""
+    if not _pg_available:
+        return
+    raw_score = analysis_result.get("confidence_score", 0)
+    confidence = round(float(raw_score) / 100.0, 4) if float(raw_score) > 1.0 else round(float(raw_score), 4)
+    flags = analysis_result.get("flags", [])
+    anomaly = len(flags) > 0
+    status_val = analysis_result.get("status", "")
+    decision = "auto_execute" if status_val == "auto_approved" else "human_review"
+    try:
+        await _execute(
+            """
+            UPDATE extracted_documents
+            SET confidence = :confidence, anomaly = :anomaly, decision = :decision, status = :status
+            WHERE invoice_id = :invoice_id
+            """,
+            {
+                "confidence": confidence,
+                "anomaly": anomaly,
+                "decision": decision,
+                "status": status_val,
+                "invoice_id": str(invoice_id),
+            },
+        )
+        await _execute(
+            "UPDATE invoices SET confidence = :confidence, status = :status WHERE id = :id",
+            {"confidence": confidence, "status": decision, "id": str(invoice_id)},
+        )
+    except Exception as exc:
+        logger.warning("update_document_from_analysis error: %s", exc)
+
 
 async def analysis_get_user_phone(user_id: str) -> Optional[str]:
     if _pg_available:

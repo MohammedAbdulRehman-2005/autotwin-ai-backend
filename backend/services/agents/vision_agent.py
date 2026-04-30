@@ -72,7 +72,7 @@ class VisionAgent:
         logger.info("[VisionAgent] Extracting from JSON dict | keys=%s", list(data.keys()))
 
         vendor = str(data.get("vendor") or "").strip()
-        raw_amount = data.get("amount")
+        raw_amount = data.get("amount") or data.get("total")
         date = str(data.get("date") or "").strip()
         currency = str(data.get("currency") or "INR").strip().upper()
 
@@ -81,11 +81,25 @@ class VisionAgent:
         except (ValueError, TypeError):
             amount = 0.0
 
-        # Normalise date
         date = self._normalise_date(date)
 
         missing = sum([not vendor, amount == 0.0, not date])
         confidence = self._score_from_missing(missing)
+
+        # Build line items if present
+        raw_items = data.get("line_items")
+        line_items = None
+        if raw_items and isinstance(raw_items, list):
+            from models.schemas import LineItem
+            line_items = [
+                LineItem(
+                    description=str(item.get("description") or ""),
+                    quantity=float(item["quantity"]) if item.get("quantity") is not None else None,
+                    unit_price=float(item["unit_price"]) if item.get("unit_price") is not None else None,
+                    amount=float(item["amount"]) if item.get("amount") is not None else None,
+                )
+                for item in raw_items if isinstance(item, dict)
+            ]
 
         logger.info(
             "[VisionAgent] JSON extraction done | vendor=%r amount=%s date=%s conf=%.2f",
@@ -93,10 +107,21 @@ class VisionAgent:
         )
         return ExtractionResult(
             vendor=vendor or "Unknown Vendor",
+            company=data.get("company") or None,
+            invoice_no=data.get("invoice_no") or None,
             amount=amount,
             date=date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            extraction_confidence=confidence,
+            due_date=data.get("due_date") or None,
+            payment_terms=data.get("payment_terms") or None,
+            subtotal=float(data["subtotal"]) if data.get("subtotal") else None,
+            gst_rate=float(data["gst_rate"]) if data.get("gst_rate") else None,
+            gst_amount=float(data["gst_amount"]) if data.get("gst_amount") else None,
             currency=currency,
+            seller_gstin=data.get("seller_gstin") or None,
+            buyer_gstin=data.get("buyer_gstin") or None,
+            line_items=line_items,
+            notes=data.get("notes") or None,
+            extraction_confidence=confidence,
         )
 
     # ──────────────────────────────────────────────────────────

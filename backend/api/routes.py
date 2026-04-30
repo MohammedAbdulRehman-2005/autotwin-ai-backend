@@ -272,18 +272,9 @@ async def approve_invoice(
     )
     
     if body.approved:
-        from services.analysis_engine import trigger_local_automation
-        amount_to_send = body.updated_amount or float(existing.get("amount", 0.0))
-        gst_to_send = float(existing.get("gst", 0.0))
-        po_number_to_send = existing.get("po_number", "")
-        
-        # In the background or awaited: we trigger the same physical automation
-        await trigger_local_automation(
-            vendor=vendor,
-            amount=amount_to_send,
-            gst=gst_to_send,
-            invoice_id=body.invoice_id,
-            po_number=po_number_to_send
+        logger.info(
+            "[Routes] Invoice %s approved — analysis engine will handle downstream automation.",
+            body.invoice_id,
         )
 
     logger.info(
@@ -459,11 +450,6 @@ async def analyze_invoice_endpoint(payload: AnalysisRequest) -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"[Routes] Analysis engine failed for document_id {payload.document_id}: {e}")
-        from services.analysis_engine import _fallback_message_generator, send_whatsapp_notification
-        
-        # Safe fallback response
-        # Using a dummy user_phone retrieval since exception context might miss it
-        # Safest is to just return failure gracefully.
         return {
             "status": "error",
             "message": str(e),

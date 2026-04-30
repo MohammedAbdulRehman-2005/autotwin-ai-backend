@@ -14,6 +14,7 @@ import httpx
 
 from core.config import settings
 from models.supabase_client import get_supabase_client
+from models.database import get_user_id_by_phone
 from services.whatsapp_client import (
     send_whatsapp_message,
     send_interactive_list,
@@ -416,13 +417,17 @@ async def handle_whatsapp_invoice(
     await send_whatsapp_message(sender_phone, "Received your invoice. Processing now…")
 
     try:
+        # Resolve sender phone → actual user account
+        real_user_id = await get_user_id_by_phone(sender_phone) or sender_phone
+        logger.info("WhatsApp invoice from %s → resolved user_id=%s", sender_phone, real_user_id)
+
         # 1. Download media
         file_bytes, detected_mime = await download_whatsapp_media(media_id)
         ext = _MIME_TO_EXT.get(mime_type or detected_mime, "jpg")
 
         # 2. Upload to Supabase Storage
         supabase = get_supabase_client()
-        storage_path = f"whatsapp/{sender_phone}/{media_id}.{ext}"
+        storage_path = f"whatsapp/{real_user_id}/{media_id}.{ext}"
         supabase.storage.from_("invoices").upload(
             path=storage_path,
             file=file_bytes,
@@ -435,7 +440,7 @@ async def handle_whatsapp_invoice(
         orchestrator = Orchestrator()
         result = await orchestrator.process_invoice(
             file_bytes=file_bytes,
-            user_id=sender_phone,
+            user_id=real_user_id,
         )
 
         # 4. Classify category
@@ -445,14 +450,14 @@ async def handle_whatsapp_invoice(
             message_hint=caption,
         )
 
-        # 5. Save to invoices table
+        # 5. Save to invoices table (linked to the real user account)
         from uuid import uuid4
         invoice_id = str(uuid4())
         supabase.table("invoices").insert({
             "id": invoice_id,
-            "user_id": sender_phone,
+            "user_id": real_user_id,
             "vendor": result.vendor,
-            "invoice_no": result.invoice_id,
+            "invoice_no": result.invoice_no or result.invoice_id,
             "amount": result.amount,
             "currency": "INR",
             "status": result.status,
@@ -465,6 +470,7 @@ async def handle_whatsapp_invoice(
         supabase.table("extracted_documents").update({
             "category": category,
             "file_url": file_url,
+            "user_id": real_user_id,
         }).eq("invoice_id", result.invoice_id).execute()
 
         # 6. Send confirmation

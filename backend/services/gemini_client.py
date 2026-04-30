@@ -37,18 +37,20 @@ def normalize_rich(data: dict) -> dict:
     """Normalize all extracted fields into consistent Python types."""
     return {
         "vendor":        str(data.get("vendor") or "Unknown Vendor").strip(),
-        "company":       str(data.get("company") or "").strip(),
-        "invoice_no":    str(data.get("invoice_no") or "").strip(),
+        "company":       str(data.get("company") or "").strip() or None,
+        "invoice_no":    str(data.get("invoice_no") or "").strip() or None,
         "amount":        _clean_amount(data.get("total") or data.get("amount")),
-        "subtotal":      _clean_amount(data.get("subtotal")),
-        "gst_amount":    _clean_amount(data.get("gst_amount")),
-        "gst_rate":      float(data.get("gst_rate") or 0.0),
+        "subtotal":      _clean_amount(data.get("subtotal")) or None,
+        "gst_amount":    _clean_amount(data.get("gst_amount")) or None,
+        "gst_rate":      float(data.get("gst_rate") or 0.0) or None,
         "date":          str(data.get("date") or "").strip(),
-        "due_date":      str(data.get("due_date") or "").strip(),
-        "payment_terms": str(data.get("payment_terms") or "").strip(),
+        "due_date":      str(data.get("due_date") or "").strip() or None,
+        "payment_terms": str(data.get("payment_terms") or "").strip() or None,
         "currency":      str(data.get("currency") or "INR").strip().upper(),
-        "line_items":    data.get("line_items") or [],
-        "notes":         str(data.get("notes") or "").strip(),
+        "seller_gstin":  str(data.get("seller_gstin") or "").strip() or None,
+        "buyer_gstin":   str(data.get("buyer_gstin") or "").strip() or None,
+        "line_items":    data.get("line_items") or None,
+        "notes":         str(data.get("notes") or "").strip() or None,
     }
 
 
@@ -78,15 +80,18 @@ Analyze the invoice image and return ONLY valid JSON with these exact fields:
   "gst_amount": numeric GST tax amount,
   "total": total invoice amount including all taxes,
   "currency": "currency code e.g. INR, USD",
+  "seller_gstin": "seller/vendor GSTIN number or null",
+  "buyer_gstin": "buyer/bill-to GSTIN number or null",
   "line_items": [
     {"description": "item name", "quantity": number, "unit_price": number, "amount": number}
   ],
-  "notes": "any important notes, payment instructions, or special remarks"
+  "notes": "any important notes, payment instructions, bank details, or special remarks"
 }
 
 Strict Rules:
 - All numeric values MUST be numbers, NOT strings
 - Missing fields must be null
+- GSTIN format is 15 alphanumeric characters (e.g. 27AAAAA0000A1Z5)
 - Return ONLY the JSON object — no explanation, no markdown
 - Do NOT hallucinate — extract only what is clearly visible"""
 

@@ -375,6 +375,16 @@ class Orchestrator:
             from models.database import save_invoice, update_vendor_history
             user_id = state.get("raw_input", {}).get("user_id", "demo_user")
 
+            # Serialize line items for storage
+            raw_line_items = ext.get("line_items")
+            if raw_line_items:
+                line_items_data = [
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                    for item in raw_line_items
+                ]
+            else:
+                line_items_data = []
+
             doc = {
                 "invoice_id": state.get("invoice_id", ""),
                 "vendor": vendor,
@@ -387,6 +397,18 @@ class Orchestrator:
                 "decision": state.get("decision", ""),
                 "status": state.get("decision", ""),
                 "category": category,
+                # Rich extraction fields
+                "invoice_no": ext.get("invoice_no"),
+                "due_date": ext.get("due_date"),
+                "payment_terms": ext.get("payment_terms"),
+                "subtotal": ext.get("subtotal"),
+                "gst_rate": ext.get("gst_rate"),
+                "gst_amount": ext.get("gst_amount"),
+                "seller_gstin": ext.get("seller_gstin"),
+                "buyer_gstin": ext.get("buyer_gstin"),
+                "company": ext.get("company"),
+                "notes": ext.get("notes"),
+                "line_items": line_items_data,
             }
             await save_invoice(doc, user_id=user_id)
             await update_vendor_history(vendor, doc, user_id=user_id)
@@ -405,12 +427,17 @@ class Orchestrator:
         # ── Auto-trigger full analysis engine (WhatsApp + DB) ────────────────
         try:
             from services.analysis_engine import process_invoice_analysis_by_invoice_id
+            from models.database import update_document_from_analysis
             invoice_id = state.get("invoice_id", "")
             if invoice_id:
                 logger.info("[Orchestrator] Auto-triggering analysis for invoice_id=%s", invoice_id)
                 analysis_result = await process_invoice_analysis_by_invoice_id(invoice_id)
                 logger.info("[Orchestrator] Analysis complete: status=%s score=%s",
                             analysis_result.get("status"), analysis_result.get("confidence_score"))
+                # Sync authoritative analysis results back to extracted_documents so
+                # the platform and WhatsApp notifications show identical anomaly/confidence values.
+                if analysis_result.get("status") not in ("error", None):
+                    await update_document_from_analysis(invoice_id, analysis_result)
             else:
                 logger.warning("[Orchestrator] No invoice_id in state — skipping analysis auto-trigger.")
         except Exception as wa_exc:
@@ -474,8 +501,18 @@ class Orchestrator:
         return ProcessInvoiceResponse(
             invoice_id=final_state.get("invoice_id", invoice_id),
             vendor=ext.get("vendor", "Unknown Vendor"),
+            company=ext.get("company"),
+            invoice_no=ext.get("invoice_no"),
             amount=ext.get("amount", 0.0),
             date=ext.get("date", ""),
+            due_date=ext.get("due_date"),
+            subtotal=ext.get("subtotal"),
+            gst_rate=ext.get("gst_rate"),
+            gst_amount=ext.get("gst_amount"),
+            seller_gstin=ext.get("seller_gstin"),
+            buyer_gstin=ext.get("buyer_gstin"),
+            line_items=[item if isinstance(item, dict) else item.model_dump() for item in (ext.get("line_items") or [])],
+            notes=ext.get("notes"),
             anomaly=anomaly_dict.get("is_anomaly", False),
             confidence=final_state.get("confidence_score", 0.0),
             status=final_state.get("decision", "pending"),
