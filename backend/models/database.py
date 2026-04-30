@@ -631,7 +631,7 @@ async def analysis_get_user_phone(user_id: str) -> Optional[str]:
     Uses the Supabase REST client so it works regardless of asyncpg pooler quirks.
     """
     try:
-        from supabase_client import get_supabase_client
+        from models.supabase_client import get_supabase_client
         supabase = get_supabase_client()
 
         import uuid as _uuid
