@@ -410,7 +410,7 @@ async def handle_whatsapp_invoice(
     2. Upload to Supabase Storage
     3. Run orchestrator pipeline (OCR → analysis → confidence → decision)
     4. Classify category (from message hint or AI)
-    5. Save to invoices + extracted_documents tables
+    5. Save to invoices + extracted_documents   tables
     6. Send confirmation; if human_review needed, send Approve/Reject buttons
     """
     await send_whatsapp_message(sender_phone, "Received your invoice. Processing now…")
@@ -419,7 +419,6 @@ async def handle_whatsapp_invoice(
         # 1. Download media
         file_bytes, detected_mime = await download_whatsapp_media(media_id)
         ext = _MIME_TO_EXT.get(mime_type or detected_mime, "jpg")
-        filename = f"whatsapp_{media_id}.{ext}"
 
         # 2. Upload to Supabase Storage
         supabase = get_supabase_client()
@@ -434,14 +433,9 @@ async def handle_whatsapp_invoice(
         # 3. Orchestrator pipeline
         from services.orchestrator import Orchestrator
         orchestrator = Orchestrator()
-        result = await orchestrator.process(
-            raw_input={
-                "file_bytes": file_bytes,
-                "file_name": filename,
-                "source": "whatsapp",
-                "sender_phone": sender_phone,
-                "user_message": caption or "",
-            }
+        result = await orchestrator.process_invoice(
+            file_bytes=file_bytes,
+            user_id=sender_phone,
         )
 
         # 4. Classify category
