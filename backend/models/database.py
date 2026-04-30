@@ -625,23 +625,41 @@ async def update_document_from_analysis(invoice_id: str, analysis_result: dict) 
 
 
 async def analysis_get_user_phone(user_id: str) -> Optional[str]:
-    if _pg_available:
+    """
+    Returns the user's WhatsApp number as a digit-only string with country code
+    (e.g. "919876543210"), or None if not found.
+    Uses the Supabase REST client so it works regardless of asyncpg pooler quirks.
+    """
+    try:
+        from supabase_client import get_supabase_client
+        supabase = get_supabase_client()
+
+        import uuid as _uuid
         try:
-            import uuid
-            uuid.UUID(user_id)
-            rows = await _execute(
-                "SELECT whatsapp_number FROM users WHERE id = :uid LIMIT 1",
-                {"uid": user_id}
-            )
-            if rows:
-                # Normalise — strip non-digits so the API gets a clean E.164 number
-                raw = rows[0].get("whatsapp_number") or ""
-                digits = "".join(filter(str.isdigit, raw))
-                return digits if digits else None
-            return None
+            _uuid.UUID(user_id)
+            # WhatsApp path: real UUID stored in users.id
+            res = supabase.table("users").select("whatsapp_number").eq("id", user_id).limit(1).execute()
         except ValueError:
+            # Dashboard/web path: Firebase UID stored in users.firebase_uid
+            res = supabase.table("users").select("whatsapp_number").eq("firebase_uid", user_id).limit(1).execute()
+
+        rows = res.data or []
+        if not rows:
             return None
-    return None
+
+        raw = rows[0].get("whatsapp_number") or ""
+        digits = "".join(filter(str.isdigit, raw))
+        if not digits:
+            return None
+
+        # Ensure E.164 country code — if only 10 digits (Indian mobile), prepend 91
+        if len(digits) == 10 and digits[0] in "6789":
+            digits = "91" + digits
+
+        return digits
+    except Exception as exc:
+        logger.warning("analysis_get_user_phone error: %s", exc)
+        return None
 
 async def analysis_check_duplicate_invoice(invoice_id: str, vendor: str, amount: float) -> bool:
     if _pg_available:

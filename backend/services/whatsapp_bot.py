@@ -421,6 +421,21 @@ async def handle_whatsapp_invoice(
         real_user_id = await get_user_id_by_phone(sender_phone) or sender_phone
         logger.info("WhatsApp invoice from %s → resolved user_id=%s", sender_phone, real_user_id)
 
+        # Auto-link: if user has no WhatsApp number saved, persist sender_phone now
+        # so analysis_engine can find them for future notifications
+        if real_user_id != sender_phone:  # we resolved a real UUID
+            from models.database import analysis_get_user_phone
+            existing_phone = await analysis_get_user_phone(real_user_id)
+            if not existing_phone:
+                try:
+                    supabase_auto = get_supabase_client()
+                    supabase_auto.table("users").update(
+                        {"whatsapp_number": f"+{sender_phone.lstrip('+')}"}
+                    ).eq("id", real_user_id).execute()
+                    logger.info("Auto-linked WhatsApp number %s to user %s", sender_phone, real_user_id)
+                except Exception as _e:
+                    logger.warning("Auto-link phone failed: %s", _e)
+
         # 1. Download media
         file_bytes, detected_mime = await download_whatsapp_media(media_id)
         ext = _MIME_TO_EXT.get(mime_type or detected_mime, "jpg")
