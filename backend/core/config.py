@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     def whatsapp_phone_id(self) -> str:
         return self.WHATSAPP_PHONE_NUMBER_ID.strip()
     WHATSAPP_VERIFY_TOKEN: str = "autotwin_secret_webhook_token"
-    WHATSAPP_DEFAULT_NUMBER: str = "917036970010"  # Fallback when DB phone lookup fails
+    WHATSAPP_DEFAULT_NUMBER: str = ""  # No fallback — skip notification if user has no linked number
 
     # AutoTwin AI Thresholds
     HIGH_CONFIDENCE_THRESHOLD: float = 0.95
