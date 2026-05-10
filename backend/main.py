@@ -180,7 +180,7 @@ A production-ready AI backend that processes invoices through a multi-agent pipe
     version=settings.APP_VERSION,
     openapi_tags=TAGS_METADATA,
     servers=[
-        {"url": "https://awake-comfort-production-4bf3.up.railway.app", "description": "Production Server"},
+        {"url": "https://web-production-8cd36.up.railway.app", "description": "Production Server"},
         {"url": "http://localhost:8000", "description": "Local Development"}
     ],
     lifespan=lifespan,
@@ -197,7 +197,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://autotwin-one.vercel.app",
-        "https://n8n-production-2f47.up.railway.app",  # N8N automation server
+        "https://web-production-8cd36.up.railway.app",  # N8N automation server
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
