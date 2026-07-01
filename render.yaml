@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: autotwin-backend
+    env: python
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: APP_NAME
+        value: "AutoTwin AI"
+      - key: APP_VERSION
+        value: "1.0.0"
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: "HS256"
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: "invoices"
+      - key: CORS_ORIGINS
+        value: '["https://autotwin-one.vercel.app"]'
+      - key: HIGH_CONFIDENCE_THRESHOLD
+        value: "0.95"
+      - key: MEDIUM_CONFIDENCE_THRESHOLD
+        value: "0.70"
