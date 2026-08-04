@@ -32,7 +32,7 @@ from fastapi import (
 )
 from fastapi.security import OAuth2PasswordRequestForm
 
-from core.security import authenticate_user, create_access_token
+from core.security import authenticate_user, create_access_token, create_guest_token
 from models.database import (
     get_dashboard_stats,
     get_invoice,
@@ -104,6 +104,44 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Dict[str, s
     token = create_access_token(data={"sub": user["username"], "role": user["role"]})
     logger.info("[Routes] /auth/token → user=%s role=%s", user["username"], user["role"])
     return {"access_token": token, "token_type": "bearer"}
+
+
+# ── Guest token ───────────────────────────────────────────────
+
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+class _GuestTokenRequest(_BaseModel):
+    firebase_uid: str
+
+
+@router.post(
+    "/auth/guest-token",
+    tags=["Auth"],
+    summary="Issue a short-lived guest JWT for an anonymous Firebase user",
+)
+async def guest_token(body: _GuestTokenRequest) -> Dict[str, Any]:
+    """
+    Exchange a **Firebase anonymous UID** for a guest Bearer JWT.
+
+    - No password required.
+    - Token expires in 2 hours.
+    - Role is ``guest`` — read-only access across the platform.
+    - Use this token as ``Authorization: Bearer <token>`` when calling
+      FastAPI endpoints from a guest session.
+    """
+    if not body.firebase_uid or len(body.firebase_uid) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="firebase_uid must be a non-empty string.",
+        )
+    token = create_guest_token(body.firebase_uid)
+    logger.info("[Routes] /auth/guest-token → firebase_uid=%s", body.firebase_uid)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": 7200,
+        "role": "guest",
+    }
 
 
 # ══════════════════════════════════════════════════════════════

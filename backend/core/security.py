@@ -46,6 +46,9 @@ _DEMO_USERS: Dict[str, Dict[str, Any]] = {
     }
 }
 
+# ── Guest token configuration ─────────────────────────────────────────
+_GUEST_TOKEN_EXPIRE_SECONDS: int = 7200  # 2 hours
+
 
 def _get_demo_hashed_password() -> str:
     """Return the demo user's bcrypt hash, computing and caching it on first call."""
@@ -116,6 +119,25 @@ def create_access_token(
     return token
 
 
+def create_guest_token(firebase_uid: str) -> str:
+    """
+    Issue a short-lived guest JWT for an anonymous Firebase user.
+
+    Args:
+        firebase_uid: The Firebase anonymous UID.
+
+    Returns:
+        Signed JWT string with role=guest and exp=2h.
+    """
+    expire = timedelta(seconds=_GUEST_TOKEN_EXPIRE_SECONDS)
+    token = create_access_token(
+        data={"sub": f"guest:{firebase_uid}", "role": "guest", "firebase_uid": firebase_uid},
+        expires_delta=expire,
+    )
+    logger.info("[Security] Guest JWT issued for firebase_uid=%s", firebase_uid)
+    return token
+
+
 def verify_token(token: str) -> Dict[str, Any]:
     """
     Decode and validate a JWT.
@@ -150,8 +172,25 @@ def verify_token(token: str) -> Dict[str, Any]:
 def get_user(username: str) -> Optional[Dict[str, Any]]:
     """
     Look up a user by username.
-    In production replace this with an async DB call.
+
+    Supports:
+      - Demo user: 'demo'
+      - Guest users: 'guest:<firebase_uid>' subjects from guest JWTs
+    In production replace regular user lookup with an async DB call.
     """
+    # ── Guest subject (guest:<firebase_uid>) ──────────────────────────
+    if username.startswith("guest:"):
+        firebase_uid = username[len("guest:"):]
+        return {
+            "username": username,
+            "role": "guest",
+            "full_name": "Guest User",
+            "email": f"guest_{firebase_uid}@autotwin.guest",
+            "firebase_uid": firebase_uid,
+            "disabled": False,
+        }
+
+    # ── Demo / registered user ────────────────────────────────────────
     user = _DEMO_USERS.get(username)
     if user is not None and user.get("hashed_password") is None:
         # Trigger lazy initialisation of the demo user's bcrypt hash.
